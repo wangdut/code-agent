@@ -56,6 +56,8 @@ interface EngineStreamCallbacks {
   requestPermission: (req: PermissionRequest) => Promise<boolean>;
   onCommandOutput: (command: string, chunk: string) => void;
   onCompressed: (session: Session) => void;
+  /** 轻量运行期提示（如 429 限流退避等待）：不写入会话历史，仅前端瞬时展示 */
+  onNotice?: (text: string) => void;
 }
 
 /** 引擎运行回调（由服务层桥接 WebView） */
@@ -69,6 +71,8 @@ export interface AgentRunCallbacks {
   requestPermission: (req: PermissionRequest) => Promise<boolean>;
   onCommandOutput: (command: string, chunk: string) => void;
   onCompressed: (session: Session) => void;
+  /** 轻量运行期提示（如 429 限流退避等待）：由服务层推送前端瞬时提示，避免静默等待误判为卡死 */
+  onNotice?: (text: string) => void;
 }
 
 export interface AgentDeps {
@@ -553,6 +557,9 @@ export class AgentEngine {
             },
             onDone: r => {
               resolve({ content: r.content || content, reasoning: r.reasoning || reasoning, toolCalls: r.toolCalls, usage: r.usage, preexecPromises });
+            },
+            onRateLimited: (waitSec, attempt) => {
+              cb.onNotice?.(`服务商限流（429），${waitSec} 秒后自动重试（第 ${attempt} 次），请稍候…`);
             },
             onError: reject
           }

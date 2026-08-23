@@ -47,6 +47,8 @@ export function App(): React.ReactElement {
   const [usage, setUsage] = useState<UsageState | null>(null);
   const [compressViewer, setCompressViewer] = useState<CompressRecord | null>(null);
   const [errorToast, setErrorToast] = useState<string | null>(null);
+  /** 运行期轻量提示（如 429 限流退避等待）：流式内容恢复/结束或超时后自动消失 */
+  const [noticeToast, setNoticeToast] = useState<string | null>(null);
   /** 编辑器右键注入的选区引用（传递给 InputArea 追加为附件） */
   const [injectRefs, setInjectRefs] = useState<AttachedFileRef[]>([]);
 
@@ -106,6 +108,15 @@ export function App(): React.ReactElement {
     return () => clearTimeout(t);
   }, [errorToast]);
 
+  // 运行期提示自动消失（退避等待上限 10s + 重试请求耗时，15s 兜底；流恢复时会提前清除）
+  useEffect(() => {
+    if (!noticeToast) {
+      return;
+    }
+    const t = setTimeout(() => setNoticeToast(null), 15000);
+    return () => clearTimeout(t);
+  }, [noticeToast]);
+
   // ---------- 消息处理 ----------
   const handleMessage = useCallback((msg: ExtensionToWebviewMessage) => {
     switch (msg.type) {
@@ -151,6 +162,7 @@ export function App(): React.ReactElement {
 
       case 'chat:start':
         setStreaming({ sessionId: msg.sessionId, messageId: msg.messageId });
+        setNoticeToast(null);
         setActiveSession(prev => {
           if (!prev || prev.id !== msg.sessionId) {
             return prev;
@@ -167,6 +179,7 @@ export function App(): React.ReactElement {
         break;
 
       case 'chat:chunk':
+        setNoticeToast(null);
         setActiveSession(prev => {
           if (!prev || prev.id !== msg.sessionId) {
             return prev;
@@ -269,6 +282,7 @@ export function App(): React.ReactElement {
 
       case 'chat:done':
         setStreaming(null);
+        setNoticeToast(null);
         setActiveSession(prev => {
           if (!prev || prev.id !== msg.sessionId) {
             return prev;
@@ -285,11 +299,17 @@ export function App(): React.ReactElement {
 
       case 'chat:stopped':
         setStreaming(null);
+        setNoticeToast(null);
         break;
 
       case 'chat:error':
         setStreaming(null);
+        setNoticeToast(null);
         setErrorToast(msg.error);
+        break;
+
+      case 'chat:notice':
+        setNoticeToast(msg.text);
         break;
 
       case 'permission:request':
@@ -596,6 +616,9 @@ export function App(): React.ReactElement {
 
       {/* 错误提示 */}
       {errorToast && <div className="error-toast">⚠ {errorToast}</div>}
+
+      {/* 运行期轻量提示（限流退避等待等） */}
+      {noticeToast && <div className="notice-toast">⏳ {noticeToast}</div>}
     </div>
   );
 }

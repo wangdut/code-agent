@@ -723,7 +723,9 @@ export class CodeAgentService {
             // 同步压缩后的消息列表视图
             controller.post({ type: 'session:updated', session: s });
             controller.post({ type: 'stats:update', stats: this.computeStats(s) });
-          }
+          },
+          // 运行期轻量提示（429 限流退避等待等）：仅前端瞬时展示，不写入会话历史
+          onNotice: text => controller.post({ type: 'chat:notice', sessionId, messageId, text })
         },
         abortController.signal,
         messageId,

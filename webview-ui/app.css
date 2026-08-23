@@ -2206,6 +2206,23 @@ button {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 
+/* 运行期轻量提示（限流退避等待等，与错误提示同位置但中性色调） */
+.notice-toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--vscode-inputValidation-infoBackground, rgba(30, 60, 90, 0.92));
+  color: var(--vscode-inputValidation-infoForeground, #fff);
+  border: 1px solid var(--vscode-inputValidation-infoBorder, #3794ff);
+  border-radius: 6px;
+  padding: 9px 16px;
+  font-size: 12.5px;
+  z-index: 300;
+  max-width: 80%;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
 /* 窄屏适配（侧边栏视图） */
 @media (max-width: 420px) {
   .session-list {

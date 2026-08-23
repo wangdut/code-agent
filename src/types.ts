@@ -318,6 +318,7 @@ export type ExtensionToWebviewMessage =
   | { type: 'chat:step'; sessionId: string; messageId: string; step: AgentStep }
   | { type: 'chat:done'; sessionId: string; messageId: string; message: ChatMessage }
   | { type: 'chat:error'; sessionId: string; messageId: string; error: string }
+  | { type: 'chat:notice'; sessionId: string; messageId: string; text: string }
   | { type: 'chat:stopped'; sessionId: string; messageId: string }
   | { type: 'permission:request'; request: PermissionRequest }
   | { type: 'stats:update'; stats: SessionContextStats }

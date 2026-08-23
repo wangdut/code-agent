@@ -38,6 +38,8 @@ export interface StreamCallbacks {
   onToolCallReady?: (tc: ToolCallResult) => void;
   /** 完整推理结束后的工具调用 */
   onDone?: (result: { content: string; reasoning: string; toolCalls: ToolCallResult[]; usage: TokenUsage; finishReason: string }) => void;
+  /** 429 限流退避等待开始（waitSec 为等待秒数，attempt 为第几次重试，从 1 起）：供上层向用户提示，避免静默等待误判为卡死 */
+  onRateLimited?: (waitSec: number, attempt: number) => void;
   /** 错误 */
   onError?: (error: Error) => void;
 }
@@ -360,6 +362,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     // 按错误提示秒数等待后自动重试（至多 2 次），避免瞬时限流直接报错打断对话
     for (let attempt = 0; status === 429 && attempt < 2; attempt++) {
       const waitSec = rateLimitWaitSeconds(String(json?.error?.message ?? raw ?? ''));
+      callbacks.onRateLimited?.(waitSec, attempt + 1);
       await sleep(Math.round(waitSec * 1000));
       if (opts.signal?.aborted) {
         throw new Error('aborted');
