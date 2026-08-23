@@ -135,10 +135,6 @@ export class ConfigManager {
     return this.config.get<string>('fileWritePermission', 'ask') === 'auto' ? 'auto' : 'ask';
   }
 
-  getOutsideWorkspaceRead(): 'ask' | 'deny' {
-    return this.config.get<string>('outsideWorkspaceRead', 'ask') === 'deny' ? 'deny' : 'ask';
-  }
-
   getTerminalAutoApprove(): boolean {
     return !!this.config.get<boolean>('terminalAutoApprove', false);
   }
@@ -214,7 +210,6 @@ export class ConfigManager {
       ...this.getInferenceParams(),
       permissionMode: this.getPermissionMode(),
       fileWritePermission: this.getFileWritePermission(),
-      outsideWorkspaceRead: this.getOutsideWorkspaceRead(),
       terminalAutoApprove: this.getTerminalAutoApprove(),
       highRiskCommands: this.getHighRiskCommandsEnabled(),
       maxToolIterations: this.getMaxToolIterations(),
@@ -243,7 +238,6 @@ export class ConfigManager {
       frequencyPenalty: 'frequencyPenalty',
       permissionMode: 'permissionMode',
       fileWritePermission: 'fileWritePermission',
-      outsideWorkspaceRead: 'outsideWorkspaceRead',
       terminalAutoApprove: 'terminalAutoApprove',
       highRiskCommands: 'highRiskCommands',
       maxToolIterations: 'maxToolIterations',

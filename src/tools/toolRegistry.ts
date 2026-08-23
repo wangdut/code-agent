@@ -3,6 +3,7 @@
  * 所有工具通过注册表登记，Agent 引擎按需调度；新增工具无需修改引擎代码
  */
 import { ToolDefinition } from '../models/modelAdapter';
+import { RunMode } from '../types';
 import { ToolContext, ToolResult, readFileTool, writeFileTool, listDirTool, searchCodeTool, diffTool, executeCommandTool } from './fileTools';
 
 export interface RegisteredTool {
@@ -10,8 +11,8 @@ export interface RegisteredTool {
   description: string;
   definition: ToolDefinition;
   execute: (args: any, ctx: ToolContext) => Promise<ToolResult>;
-  /** 对话模式是否可用（对话模式禁用所有工具） */
-  agentOnly: boolean;
+  /** 只读工具（V0.9.0）：对话模式可用（文件读取/目录遍历/检索/diff）；写入与终端工具仅智能体模式可用 */
+  readonly: boolean;
 }
 
 export class ToolRegistry {
@@ -39,7 +40,7 @@ export class ToolRegistry {
         }
       },
       execute: readFileTool,
-      agentOnly: true
+      readonly: true
     });
 
     this.register({
@@ -62,7 +63,7 @@ export class ToolRegistry {
         }
       },
       execute: writeFileTool,
-      agentOnly: true
+      readonly: false
     });
 
     this.register({
@@ -82,7 +83,7 @@ export class ToolRegistry {
         }
       },
       execute: listDirTool,
-      agentOnly: true
+      readonly: true
     });
 
     this.register({
@@ -105,7 +106,7 @@ export class ToolRegistry {
         }
       },
       execute: searchCodeTool,
-      agentOnly: true
+      readonly: true
     });
 
     this.register({
@@ -127,7 +128,7 @@ export class ToolRegistry {
         }
       },
       execute: executeCommandTool,
-      agentOnly: true
+      readonly: false
     });
 
     this.register({
@@ -147,7 +148,7 @@ export class ToolRegistry {
         }
       },
       execute: diffTool,
-      agentOnly: true
+      readonly: true
     });
   }
 
@@ -159,9 +160,20 @@ export class ToolRegistry {
     return this.tools.get(name);
   }
 
-  /** Agent 模式可用的全部工具定义 */
+  /** 智能体模式可用的全部工具定义 */
   getAllDefinitions(): ToolDefinition[] {
-    return [...this.tools.values()].filter(t => t.agentOnly).map(t => t.definition);
+    return [...this.tools.values()].map(t => t.definition);
+  }
+
+  /**
+   * 按运行模式获取可用工具定义（V0.9.0 调度层权限管控）
+   * 对话模式仅挂载只读工具（读取/遍历/检索/diff），写入与终端工具不入请求，从调度层面屏蔽越权调用
+   */
+  getDefinitionsForMode(mode: RunMode): ToolDefinition[] {
+    if (mode === 'chat') {
+      return [...this.tools.values()].filter(t => t.readonly).map(t => t.definition);
+    }
+    return this.getAllDefinitions();
   }
 
   getAll(): RegisteredTool[] {

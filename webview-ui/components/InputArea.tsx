@@ -247,8 +247,8 @@ export function InputArea(props: Props): React.ReactElement {
             onChange={e => props.onPermissionModeChange(e.target.value as 'ask' | 'auto')}
             title={
               props.permissionMode === 'auto'
-                ? '全自动模式：常规文件写入与工作区内命令自动放行，高危命令仍需确认'
-                : '询问模式：每次敏感操作（文件修改/命令执行）前提示确认'
+                ? '全自动模式：修改工作区内文件自动放行，工作区外文件只读；高危命令仍需确认'
+                : '询问模式：修改工作区内文件前提示确认，工作区外文件只读'
             }
           >
             <option value="ask">🛡 询问模式</option>

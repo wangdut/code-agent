@@ -7,7 +7,7 @@
  *   4. 引用资源层：用户 @ 引用的文件，按需加载、未持续引用自动降级
  * 自动/手动压缩：上下文达到模型窗口阈值（默认 75%）触发，差异化压缩算法
  */
-import { ChatMessage, CompressRecord, ModelMeta, Session, SessionContextStats } from '../types';
+import { ChatMessage, CompressRecord, ModelMeta, RunMode, Session, SessionContextStats } from '../types';
 import { estimateTokens } from './tokenCounter';
 import { ModelAdapter, ModelMessage } from '../models/modelAdapter';
 import { randomId } from '../utils/id';
@@ -28,6 +28,17 @@ const SUMMARIZE_SYSTEM = `你是对话压缩器。将以下编程会话内容压
 1. 保留：核心需求与目标、已完成的修改（文件路径与关键改动）、关键结论与决策、未解决的问题、执行错误与修复方式
 2. 压缩策略：代码片段只保留函数签名与核心逻辑，裁剪注释与非核心代码；执行日志只保留结论与关键报错；对话文本提炼核心需求，去除冗余表述
 3. 使用简洁的中文要点输出，每类信息用"## 小节"分组，总量控制在 600 字以内`;
+
+/**
+ * 对话模式系统约束（V0.9.0 权限模型修正）
+ * 明确告知模型能力边界：仅只读工具可用、写入/终端操作会被系统拒绝，避免无效越权调用
+ */
+const CHAT_MODE_CONSTRAINT = `
+
+## 当前模式约束（对话模式）
+- 当前处于对话模式：仅可使用只读工具（read_file / list_dir / search_code / get_diff）读取工作区或本地任意路径的文件与目录，基于文件内容回答用户问题
+- 禁止修改、写入、删除文件，禁止执行终端命令；此类操作会被系统一律拒绝
+- 如用户需要修改代码或执行命令，请明确告知用户：切换至智能体模式后即可执行`;
 
 export class ContextManager {
   private systemPrompt = '';
@@ -206,14 +217,16 @@ export class ContextManager {
   }
 
   /** 构建发送给模型的完整消息序列（系统层 + 摘要层 + 活跃层 + 引用层） */
-  buildMessages(session: Session, newUserContent: string): ModelMessage[] {
+  buildMessages(session: Session, newUserContent: string, mode?: RunMode): ModelMessage[] {
     const messages: ModelMessage[] = [];
     if (this.systemPrompt) {
       // 语言自适应：按用户最近一次输入的主导语言注入动态语言约束（思考与回复跟随用户语言）
       const lang = this.detectDominantLanguage(newUserContent);
+      // 对话模式附加能力边界约束（V0.9.0：只读工具与拦截规则，减少无效越权调用）
+      const modeConstraint = mode === 'chat' ? CHAT_MODE_CONSTRAINT : '';
       messages.push({
         role: 'system',
-        content: `${this.systemPrompt}\n\n## 语言约束\n用户最近一次输入以${lang === 'zh' ? '中文' : '英文'}为主，请使用${lang === 'zh' ? '中文' : '英文'}进行思考与回复；代码、命令、工具参数等非自然语言内容保持原格式。`
+        content: `${this.systemPrompt}${modeConstraint}\n\n## 语言约束\n用户最近一次输入以${lang === 'zh' ? '中文' : '英文'}为主，请使用${lang === 'zh' ? '中文' : '英文'}进行思考与回复；代码、命令、工具参数等非自然语言内容保持原格式。`
       });
     }
     // 历史摘要层

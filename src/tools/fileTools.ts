@@ -78,20 +78,7 @@ export async function readFileTool(args: any, ctx: ToolContext): Promise<ToolRes
     return { success: false, output: `不支持读取二进制文件: ${filePath}` };
   }
 
-  // 工作区外读取权限
-  const outside = ctx.security.checkFileReadOutside(filePath);
-  if (outside.decision === 'deny') {
-    ctx.audit.log({ type: 'file', action: 'read', target: filePath, result: 'denied', detail: '工作区外文件读取被拒绝', sessionId: ctx.sessionId });
-    return { success: false, output: `权限拒绝：工作区外文件禁止读取（${filePath}）`, denied: true };
-  }
-  if (outside.decision === 'confirm' && outside.request) {
-    const approved = await ctx.requestPermission(outside.request);
-    if (!approved) {
-      ctx.audit.log({ type: 'file', action: 'read', target: filePath, result: 'cancelled', detail: '用户拒绝读取工作区外文件', sessionId: ctx.sessionId });
-      return { success: false, output: '用户拒绝了工作区外文件读取', cancelled: true };
-    }
-  }
-
+  // 读取权限完整开放（V0.9.0）：工作区内/外文件均可直接读取，无需确认
   const content = fs.readFileSync(filePath, 'utf8');
   let lines = content.split('\n');
   if (startLine !== undefined || endLine !== undefined) {
@@ -208,19 +195,7 @@ export async function writeFileTool(args: any, ctx: ToolContext): Promise<ToolRe
 export async function listDirTool(args: any, ctx: ToolContext): Promise<ToolResult> {
   const rawPath = String(args.path ?? '.');
   const dirPath = ctx.security.resolvePath(rawPath);
-  // 工作区外目录列举权限（与 read_file 保持一致）
-  const outside = ctx.security.checkFileReadOutside(dirPath);
-  if (outside.decision === 'deny') {
-    ctx.audit.log({ type: 'file', action: 'list', target: dirPath, result: 'denied', detail: '工作区外目录列举被拒绝', sessionId: ctx.sessionId });
-    return { success: false, output: `权限拒绝：工作区外目录禁止列举（${dirPath}）`, denied: true };
-  }
-  if (outside.decision === 'confirm' && outside.request) {
-    const approved = await ctx.requestPermission(outside.request);
-    if (!approved) {
-      ctx.audit.log({ type: 'file', action: 'list', target: dirPath, result: 'cancelled', detail: '用户拒绝列举工作区外目录', sessionId: ctx.sessionId });
-      return { success: false, output: '用户拒绝了工作区外目录列举', cancelled: true };
-    }
-  }
+  // 目录列举权限完整开放（V0.9.0）：工作区内/外目录均可直接遍历
   if (!fs.existsSync(dirPath)) {
     return { success: false, output: `目录不存在: ${dirPath}` };
   }
@@ -255,19 +230,7 @@ export async function searchCodeTool(args: any, ctx: ToolContext): Promise<ToolR
     return { success: false, output: '缺少检索关键词 pattern' };
   }
   const searchRoot = args.path ? ctx.security.resolvePath(String(args.path)) : (absWorkspaceRoot() ?? process.cwd());
-  // 工作区外检索权限（与 read_file 保持一致，防止检索任意磁盘文件）
-  const outside = ctx.security.checkFileReadOutside(searchRoot);
-  if (outside.decision === 'deny') {
-    ctx.audit.log({ type: 'file', action: 'search', target: searchRoot, result: 'denied', detail: '工作区外检索被拒绝', sessionId: ctx.sessionId });
-    return { success: false, output: `权限拒绝：工作区外路径禁止检索（${searchRoot}）`, denied: true };
-  }
-  if (outside.decision === 'confirm' && outside.request) {
-    const approved = await ctx.requestPermission(outside.request);
-    if (!approved) {
-      ctx.audit.log({ type: 'file', action: 'search', target: searchRoot, result: 'cancelled', detail: '用户拒绝检索工作区外路径', sessionId: ctx.sessionId });
-      return { success: false, output: '用户拒绝了工作区外检索', cancelled: true };
-    }
-  }
+  // 检索权限完整开放（V0.9.0）：工作区内/外路径均可检索，只读无副作用
   const caseSensitive = !!args.caseSensitive;
 
   let regex: RegExp;

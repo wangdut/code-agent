@@ -1,13 +1,17 @@
 /**
  * 安全权限体系
- * - 文件操作分级权限：工作区内（全自动/询问）、工作区外（强制只读 + 读取提示）
- * - 终端操作权限：默认确认、工作区内命令可免确认、高危命令强制二次确认
+ * - 文件读取权限：任何运行模式下完整开放（工作区内 + 工作区外本地文件/目录，无需确认）
+ * - 文件写入分级权限：工作区内（询问/全自动，全自动直接放行）、工作区外任何模式下只读不可修改
+ * - 终端操作权限：默认确认、工作区内命令可免确认（不受询问/全自动模式影响）、高危命令强制二次确认
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ConfigManager } from '../config/configManager';
-import { PermissionRequest } from '../types';
+import { PermissionRequest, READONLY_TOOL_NAMES, RunMode } from '../types';
+
+/** 对话模式越权拦截统一提示（V0.9.0：写入/终端操作在对话模式下的标准拒绝文案） */
+export const CHAT_MODE_DENY_HINT = '对话模式仅支持只读文件问答，如需修改文件或执行命令，请切换至智能体模式';
 
 /** 高危命令拦截规则（破坏性操作，统一对命令小写形式匹配） */
 const HIGH_RISK_PATTERNS: Array<{ pattern: RegExp; desc: string }> = [
@@ -109,7 +113,23 @@ export class SecurityManager {
   }
 
   /**
+   * 统一权限校验（V0.9.0 工具执行前置链路）
+   * 基于当前运行模式判定工具合法性，所有工具调用必须经过该校验层：
+   *   - 智能体模式：全部工具放行（文件写/命令权限由各自判定方法控制）
+   *   - 对话模式：仅放行只读工具，写入/终端类工具在执行前拦截（调度层屏蔽之外的执行层兜底）
+   */
+  checkToolAllowed(toolName: string, mode: RunMode): { allowed: boolean; reason?: string } {
+    if (mode === 'agent' || (READONLY_TOOL_NAMES as readonly string[]).includes(toolName)) {
+      return { allowed: true };
+    }
+    return { allowed: false, reason: CHAT_MODE_DENY_HINT };
+  }
+
+  /**
    * 文件写入权限判定
+   * 工作区外文件任何运行模式下强制只读（拒绝写入）；
+   * 工作区内：询问模式（ask）每次修改前确认，全自动模式（auto）直接放行——
+   * 询问/全自动模式的区分仅作用于工作区内文件的修改/编辑/新增/删除
    * @returns 'allow' 直接允许 | 'deny' 直接拒绝 | 'confirm' 需要确认
    */
   checkFileWrite(absPath: string, content: string, oldContent?: string): { decision: 'allow' | 'deny' | 'confirm'; request?: PermissionRequest } {
@@ -133,31 +153,7 @@ export class SecurityManager {
     return { decision: 'confirm', request };
   }
 
-  /** 工作区外文件读取判定 */
-  checkFileReadOutside(absPath: string): { decision: 'allow' | 'deny' | 'confirm'; request?: PermissionRequest } {
-    if (this.isInWorkspace(absPath)) {
-      return { decision: 'allow' };
-    }
-    const policy = this.config.getOutsideWorkspaceRead();
-    // 全自动模式：工作区外读取放行（读操作低风险，工作区外写入仍强制禁止）
-    if (policy === 'deny' && this.config.getPermissionMode() !== 'auto') {
-      return { decision: 'deny' };
-    }
-    if (this.config.getPermissionMode() === 'auto') {
-      return { decision: 'allow' };
-    }
-    const request: PermissionRequest = {
-      id: '',
-      type: 'fileReadOutside',
-      title: '工作区外文件读取',
-      detail: `Agent 请求读取工作区外文件：${absPath}`,
-      impact: '该文件位于当前工作区之外，读取内容可能包含敏感信息',
-      payload: { path: absPath }
-    };
-    return { decision: 'confirm', request };
-  }
-
-  /** 终端命令权限判定 */
+  /** 终端命令权限判定（V0.9.0 修订：询问/全自动模式仅作用于工作区内文件修改，命令免确认仅由终端免确认开关控制） */
   checkCommand(cwd: string, command: string): { decision: 'allow' | 'deny' | 'confirm'; request?: PermissionRequest; highRisk: boolean } {
     const risk = this.checkCommandRisk(command);
     const highRiskBlocked = this.config.getHighRiskCommandsEnabled() && risk.isHighRisk;
@@ -175,7 +171,7 @@ export class SecurityManager {
       };
       return { decision: 'confirm', request, highRisk: true };
     }
-    if (inWorkspace && (this.config.getTerminalAutoApprove() || this.config.getPermissionMode() === 'auto')) {
+    if (inWorkspace && this.config.getTerminalAutoApprove()) {
       return { decision: 'allow', highRisk: false };
     }
     const request: PermissionRequest = {

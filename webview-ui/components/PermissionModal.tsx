@@ -7,7 +7,6 @@ import { PermissionRequest } from '../../src/types';
 
 const TYPE_LABELS: Record<string, { label: string; icon: string; tone: string }> = {
   fileWrite: { label: '文件修改确认', icon: '✏️', tone: 'tone-normal' },
-  fileReadOutside: { label: '工作区外文件读取', icon: '👁', tone: 'tone-warn' },
   command: { label: '终端命令确认', icon: '>_', tone: 'tone-warn' },
   highRiskCommand: { label: '高危命令二次确认', icon: '⚠️', tone: 'tone-danger' }
 };

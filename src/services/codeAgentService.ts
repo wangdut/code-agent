@@ -370,7 +370,7 @@ export class CodeAgentService {
     return out;
   }
 
-  /** 加载附件内容（文件 + 文件夹批量引用） */
+  /** 加载附件内容（文件 + 文件夹批量引用；V0.9.0：读取权限完整开放，工作区内/外文件均可加载） */
   private loadAttachments(attachments: AttachedFileRef[]): AttachedFileRef[] {
     const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const result: AttachedFileRef[] = [];
@@ -383,11 +383,6 @@ export class CodeAgentService {
       let absPath = att.path;
       if (!path.isAbsolute(absPath) && wsRoot) {
         absPath = path.join(wsRoot, att.path);
-      }
-      // 工作区外附件强制拒绝（纵深防御：协议被伪造时防止任意文件读取外发）
-      if (!wsRoot || !this.security.isInWorkspace(path.normalize(absPath))) {
-        result.push({ ...att, content: `(附件位于工作区外，已拒绝加载: ${att.path})` });
-        continue;
       }
       if (att.kind === 'file') {
         try {
@@ -581,7 +576,7 @@ export class CodeAgentService {
       return;
     }
 
-    // 加载附件内容（引用资源层）
+    // 加载附件内容（引用资源层；读取权限完整开放，工作区外附件同样加载）
     const loadedAttachments = this.loadAttachments(attachments);
     const messageId = randomId();
     const abortController = new AbortController();

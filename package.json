@@ -2,7 +2,7 @@
   "name": "code-agent",
   "displayName": "Code Agent",
   "description": "基于大语言模型的智能编程 Agent：代码生成、文件编辑、终端执行、多轮任务自主闭环",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "publisher": "wangh",
   "author": {
     "name": "wangh"
@@ -179,7 +179,7 @@
             "auto"
           ],
           "default": "ask",
-          "description": "权限模式：询问模式（每次敏感操作前提示确认，推荐）/ 全自动模式（常规文件写入、工作区内命令自动放行；高危命令仍然需要确认）"
+          "description": "权限模式：询问模式（修改工作区内文件前提示确认，推荐）/ 全自动模式（修改工作区内文件自动放行）；询问/全自动仅作用于智能体模式下工作区内文件的修改，工作区外文件任何模式下只读"
         },
         "codeAgent.fileWritePermission": {
           "type": "string",
@@ -190,19 +190,10 @@
           "default": "ask",
           "description": "工作区内文件修改权限：全自动模式 / 询问模式（每次修改前展示 diff 预览）"
         },
-        "codeAgent.outsideWorkspaceRead": {
-          "type": "string",
-          "enum": [
-            "ask",
-            "deny"
-          ],
-          "default": "ask",
-          "description": "工作区外文件读取策略：读取前提示确认 / 直接拒绝（工作区外文件强制只读）"
-        },
         "codeAgent.terminalAutoApprove": {
           "type": "boolean",
           "default": false,
-          "description": "工作区内终端命令免确认（高危命令始终需要确认）"
+          "description": "工作区内终端命令免确认（高危命令始终需要确认；终端命令执行不受询问/全自动模式影响）"
         },
         "codeAgent.highRiskCommands": {
           "type": "boolean",

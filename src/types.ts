@@ -20,6 +20,13 @@ export interface ModelMeta {
 /** 运行模式 */
 export type RunMode = 'chat' | 'agent';
 
+/**
+ * 只读工具名集合（V0.9.0 对话模式可用工具集）
+ * 无副作用操作：文件读取、目录遍历、代码检索、diff 对比；支持并行执行与流式预启动
+ * 同时作为统一权限校验层的判定基准：对话模式下仅这些工具可被执行
+ */
+export const READONLY_TOOL_NAMES = ['read_file', 'list_dir', 'search_code', 'get_diff'] as const;
+
 /** Token 用量统计 */
 export interface TokenUsage {
   inputTokens: number;
@@ -167,7 +174,7 @@ export interface SessionListItem {
 /** 权限请求 */
 export interface PermissionRequest {
   id: string;
-  type: 'fileWrite' | 'fileReadOutside' | 'command' | 'highRiskCommand';
+  type: 'fileWrite' | 'command' | 'highRiskCommand';
   title: string;
   detail: string;
   /** 影响范围描述 */
@@ -200,10 +207,9 @@ export interface SettingsSnapshot {
   topP: number;
   maxTokens: number;
   frequencyPenalty: number;
-  /** 权限模式：ask 询问模式 / auto 全自动模式（高危命令仍会确认） */
+  /** 权限模式：ask 询问模式 / auto 全自动模式（仅作用于智能体模式下工作区内文件的修改/编辑/新增/删除；工作区外文件任何模式只读） */
   permissionMode: 'ask' | 'auto';
   fileWritePermission: 'auto' | 'ask';
-  outsideWorkspaceRead: 'ask' | 'deny';
   terminalAutoApprove: boolean;
   highRiskCommands: boolean;
   /** 单轮任务最大工具调用轮次（1-1000，默认 20） */

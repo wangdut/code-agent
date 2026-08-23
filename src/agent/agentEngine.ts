@@ -4,7 +4,7 @@
  * 参考 Cline 的工具调度与任务执行链路设计
  */
 import * as vscode from 'vscode';
-import { AgentStep, AttachedFileRef, ChatMessage, MessageSegment, ModelMeta, PermissionRequest, RunMode, Session, ToolCall } from '../types';
+import { AgentStep, AttachedFileRef, ChatMessage, MessageSegment, ModelMeta, PermissionRequest, READONLY_TOOL_NAMES, RunMode, Session, ToolCall } from '../types';
 import { ConfigManager } from '../config/configManager';
 import { SecurityManager } from '../security/securityManager';
 import { AuditLogger } from '../security/auditLogger';
@@ -21,7 +21,7 @@ import { randomId, truncate } from '../utils/id';
 const MAX_TOOL_RESULT_LEN = 30000;
 
 /** 只读工具集合：无副作用，同批次可并行执行（流式执行流水线中也可预启动） */
-const READONLY_TOOLS = new Set(['read_file', 'list_dir', 'search_code', 'get_diff']);
+const READONLY_TOOLS = new Set<string>(READONLY_TOOL_NAMES);
 
 const SYSTEM_PROMPT = `你是 Code Agent，VSCode 中的智能编程助手。你可以自主调用工具完成任务。
 
@@ -34,7 +34,7 @@ const SYSTEM_PROMPT = `你是 Code Agent，VSCode 中的智能编程助手。你
 6. Token 效率：读取文件时按需分段，避免重复读取大文件；回答简洁直接
 
 ## 安全规则
-- 只能修改当前工作区内的文件，工作区外文件强制只读
+- 只能修改当前工作区内的文件，工作区外文件任何情况下只读（可读取，不可修改/删除）
 - 不执行破坏性命令；高危命令会触发用户二次确认
 - 不泄露任何敏感信息（密钥、令牌等）
 - 不确定时先询问用户，不擅自扩大操作范围
@@ -111,9 +111,9 @@ export class AgentEngine {
     this.runs.get(sessionId)?.abort();
   }
 
-  /** 构建发送给模型的工具集（对话模式为空，禁用工具） */
+  /** 构建发送给模型的工具集（V0.9.0：对话模式仅挂载只读工具，写入/终端工具不入请求，调度层屏蔽越权调用） */
   private buildTools(mode: RunMode) {
-    return mode === 'agent' ? this.deps.tools.getAllDefinitions() : [];
+    return this.deps.tools.getDefinitionsForMode(mode);
   }
 
   /**
@@ -225,9 +225,9 @@ export class AgentEngine {
         }
       }
 
-      // 3. 构建四层上下文消息（系统层 + 摘要层 + 活跃层 + 引用层）
+      // 3. 构建四层上下文消息（系统层 + 摘要层 + 活跃层 + 引用层；对话模式附加能力边界约束）
       const contentWithAttachments = this.buildUserContent(userText, attachments);
-      const messages: ModelMessage[] = this.deps.context.buildMessages(session, contentWithAttachments);
+      const messages: ModelMessage[] = this.deps.context.buildMessages(session, contentWithAttachments, mode);
 
       // 初始化移入 try：异常时 finally 仍会清理 runs，避免会话被永久判定为运行中
       const adapter = await this.deps.getAdapter();
@@ -243,7 +243,7 @@ export class AgentEngine {
         lastRequestChainLen = session.messages.length;
         // 本轮推理节点段 id（工具轮次的正文将作为 insight 段分散挂载，仅在出现工具调用时启用）
         const insightSegmentId = randomId();
-        const result = await this.streamOnce(adapter, model, messages, tools, params, streamCb, signal, session.id, insightSegmentId, tc => {
+        const result = await this.streamOnce(adapter, model, messages, tools, params, streamCb, signal, session.id, insightSegmentId, mode, tc => {
           // 工具调用解析完整：立即在对话流插入工具执行节点（pending 加载态），无需等待本轮推理结束
           const step: AgentStep = {
             id: randomId(),
@@ -356,7 +356,7 @@ export class AgentEngine {
               if (pre) {
                 return pre;
               }
-              return this.executeTool(tc, session.id, streamCb, signal, chunk => {
+              return this.executeTool(tc, session.id, streamCb, signal, mode, chunk => {
                 if (group.length === 1 && tc.name === 'execute_command') {
                   liveOutput += chunk;
                   if (liveOutput.length < MAX_TOOL_RESULT_LEN) {
@@ -499,6 +499,7 @@ export class AgentEngine {
     signal: AbortSignal,
     sessionId: string,
     insightSegmentId: string,
+    mode: RunMode,
     onToolCallParsed: (tc: { id: string; name: string; arguments: string }) => void
   ): Promise<{ content: string; reasoning: string; toolCalls: Array<{ id: string; name: string; arguments: string }>; usage: { inputTokens: number; outputTokens: number }; preexecPromises: Map<string, Promise<ToolResult>> }> {
     return new Promise((resolve, reject) => {
@@ -547,7 +548,7 @@ export class AgentEngine {
               if (!READONLY_TOOLS.has(tc.name) || signal.aborted) {
                 return;
               }
-              preexecPromises.set(tc.id, this.executeTool(tc, sessionId, cb, signal));
+              preexecPromises.set(tc.id, this.executeTool(tc, sessionId, cb, signal, mode));
             },
             onDone: r => {
               resolve({ content: r.content || content, reasoning: r.reasoning || reasoning, toolCalls: r.toolCalls, usage: r.usage, preexecPromises });
@@ -565,11 +566,18 @@ export class AgentEngine {
     sessionId: string,
     cb: EngineStreamCallbacks,
     signal: AbortSignal,
+    mode: RunMode,
     onLiveOutput?: (chunk: string) => void
   ): Promise<ToolResult> {
     const tool = this.deps.tools.get(tc.name);
     if (!tool) {
       return { success: false, output: `未知工具: ${tc.name}` };
+    }
+    // 统一权限校验（V0.9.0 执行层防线）：所有工具执行前按当前运行模式判定合法性，底层杜绝模式越权
+    const modeCheck = this.deps.security.checkToolAllowed(tc.name, mode);
+    if (!modeCheck.allowed) {
+      this.deps.audit.log({ type: 'permission', action: tc.name, target: tc.name, result: 'denied', detail: '对话模式越权工具调用被拦截', sessionId });
+      return { success: false, output: modeCheck.reason ?? '权限拒绝：当前模式不允许该操作', denied: true };
     }
     let args: any = {};
     try {

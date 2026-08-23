@@ -49,7 +49,6 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
         frequencyPenalty: Number(form.frequencyPenalty),
         permissionMode: form.permissionMode,
         fileWritePermission: form.fileWritePermission,
-        outsideWorkspaceRead: form.outsideWorkspaceRead,
         terminalAutoApprove: form.terminalAutoApprove,
         highRiskCommands: form.highRiskCommands,
         // 保存兜底：非数字/超范围回退为合法值（1-1000，默认 20）
@@ -204,8 +203,8 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
         <Section title="Agent 行为" icon="🤖">
           <Field label="默认执行模式">
             <select className="text-input" value={form.defaultMode} onChange={e => set('defaultMode', e.target.value as 'chat' | 'agent')}>
-              <option value="agent">智能体模式（可调用工具）</option>
-              <option value="chat">对话模式（纯问答）</option>
+              <option value="agent">智能体模式（完整工具集）</option>
+              <option value="chat">对话模式（只读文件问答）</option>
             </select>
           </Field>
           <Field
@@ -266,22 +265,16 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
 
         {/* 5. 安全权限 */}
         <Section title="安全权限" icon="🛡">
-          <Field label="权限模式" hint="与底部快捷栏同步；全自动模式高危命令仍会确认">
+          <Field label="权限模式" hint="与底部快捷栏同步；仅作用于智能体模式下工作区内文件的修改，工作区外文件任何模式下只读">
             <select className="text-input" value={form.permissionMode} onChange={e => set('permissionMode', e.target.value as 'ask' | 'auto')}>
-              <option value="ask">询问模式（推荐，敏感操作前提示确认）</option>
-              <option value="auto">全自动模式（常规操作自动放行）</option>
+              <option value="ask">询问模式（推荐，修改文件前提示确认）</option>
+              <option value="auto">全自动模式（修改文件自动放行）</option>
             </select>
           </Field>
           <Field label="工作区内文件修改权限">
             <select className="text-input" value={form.fileWritePermission} onChange={e => set('fileWritePermission', e.target.value as 'auto' | 'ask')}>
               <option value="ask">询问模式（每次修改前展示 diff 预览）</option>
               <option value="auto">全自动模式（无需确认）</option>
-            </select>
-          </Field>
-          <Field label="工作区外文件策略" hint="工作区外文件始终强制只读">
-            <select className="text-input" value={form.outsideWorkspaceRead} onChange={e => set('outsideWorkspaceRead', e.target.value as 'ask' | 'deny')}>
-              <option value="ask">读取前弹出安全提示</option>
-              <option value="deny">直接拒绝读取</option>
             </select>
           </Field>
         </Section>
