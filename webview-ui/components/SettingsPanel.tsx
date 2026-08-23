@@ -22,8 +22,14 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
 
   useEffect(() => {
     setForm(settings);
-    // 服务商列表变化后：选中项被删除时回退到首个服务商
-    setSelectedProviderId(prev => (settings.providers.some(p => p.id === prev) ? prev : settings.providers[0]?.id ?? ''));
+    // 服务商列表变化后：选中项被删除时回退到默认服务商（V1.2.0 联动基准），再回退首个
+    setSelectedProviderId(prev =>
+      settings.providers.some(p => p.id === prev)
+        ? prev
+        : settings.providers.some(p => p.id === settings.defaultProvider)
+          ? settings.defaultProvider
+          : settings.providers[0]?.id ?? ''
+    );
   }, [settings]);
 
   const set = <K extends keyof SettingsSnapshot>(key: K, value: SettingsSnapshot[K]) => {
@@ -42,6 +48,7 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
       type: 'settings:update',
       settings: {
         defaultModel: form.defaultModel,
+        defaultProvider: form.defaultProvider,
         defaultMode: form.defaultMode,
         requestTimeout: Number(form.requestTimeout),
         proxy: form.proxy,
@@ -70,13 +77,26 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
     setEditingModel(null);
   };
 
-  const saveProvider = (p: { name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean }) => {
+  const saveProvider = (p: { name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean; presetId?: string }) => {
     if (editingProvider) {
-      post({ type: 'provider:update', id: editingProvider.id, ...p });
+      post({ type: 'provider:update', id: editingProvider.id, name: p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, clearApiKey: p.clearApiKey });
     } else {
-      post({ type: 'provider:add', ...p });
+      post({ type: 'provider:add', name: p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, presetId: p.presetId });
     }
     setEditingProvider(null);
+  };
+
+  /**
+   * 默认服务商切换（V1.2.0 联动）：主界面模型下拉框与默认模型同步跟随；
+   * 默认模型不属于新服务商时自动切换为该服务商的首个模型，模型参数配置区同步切换
+   */
+  const changeDefaultProvider = (pid: string) => {
+    set('defaultProvider', pid);
+    setSelectedProviderId(pid);
+    const modelsOfNew = form.models.filter(m => (m.providerId ?? 'deepseek') === pid);
+    if (!modelsOfNew.some(m => m.id === form.defaultModel)) {
+      set('defaultModel', modelsOfNew[0]?.id ?? '');
+    }
   };
 
   return (
@@ -147,6 +167,17 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
             </div>
           </Field>
           <Field
+            label="默认服务商"
+            tooltip="当前生效的服务商：主界面底部模型切换下拉框仅展示该服务商下的模型；默认模型条目随该服务商联动；切换后主界面模型列表实时同步刷新"
+            hint="切换后：底部模型下拉框与默认模型同步跟随，不同服务商模型分区不混杂"
+          >
+            <select className="text-input" value={form.defaultProvider} onChange={e => changeDefaultProvider(e.target.value)}>
+              {form.providers.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field
             label="模型参数配置区服务商"
             tooltip="模型参数配置区展示选中服务商下的所有模型，可针对单个模型校准上下文窗口与最大输出 Token 等元数据"
             hint="下方模型列表仅展示所选服务商的模型"
@@ -181,23 +212,25 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
           </Field>
           <Field
             label="默认模型"
-            tooltip="新会话默认使用的模型；模型按所属服务商分组展示，切换后即时生效"
+            tooltip="新会话默认使用的模型；仅展示当前默认服务商下的模型（与默认服务商联动），切换后即时生效；上下文统计与窗口阈值同步适配该模型元数据"
           >
             <select className="text-input" value={form.defaultModel} onChange={e => set('defaultModel', e.target.value)}>
-              {form.models.length === 0 && <option value="">暂无可用模型（请先刷新模型列表）</option>}
-              {form.providers.map(p => {
-                const models = form.models.filter(m => (m.providerId ?? 'deepseek') === p.id);
-                if (models.length === 0) {
-                  return null;
-                }
+              {(() => {
+                const modelsOfProvider = form.models.filter(m => (m.providerId ?? 'deepseek') === form.defaultProvider);
                 return (
-                  <optgroup key={p.id} label={p.name}>
-                    {models.map(m => (
+                  <>
+                    {modelsOfProvider.length === 0 && (
+                      <option value="">暂无可用模型（请先为该服务商配置密钥后刷新模型列表）</option>
+                    )}
+                    {form.defaultModel && !modelsOfProvider.some(m => m.id === form.defaultModel) && (
+                      <option value={form.defaultModel}>{form.defaultModel}（当前默认·其他服务商）</option>
+                    )}
+                    {modelsOfProvider.map(m => (
                       <option key={m.id} value={m.id}>{m.name} ({m.id})</option>
                     ))}
-                  </optgroup>
+                  </>
                 );
-              })}
+              })()}
             </select>
           </Field>
           <div className="field-row">
@@ -377,9 +410,9 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
         <ModelEditor model={editingModel} onSave={saveModel} onCancel={() => setEditingModel(null)} />
       )}
 
-      {/* 服务商新增/编辑弹层 */}
+      {/* 服务商新增/编辑弹层（V1.2.0：新增模式支持预置厂商下拉建议快捷填充） */}
       {editingProvider && (
-        <ProviderEditor provider={editingProvider} onSave={saveProvider} onCancel={() => setEditingProvider(null)} />
+        <ProviderEditor provider={editingProvider} presetProviders={settings.presetProviders} onSave={saveProvider} onCancel={() => setEditingProvider(null)} />
       )}
     </div>
   );
@@ -482,16 +515,20 @@ function ModelEditor({ model, onSave, onCancel }: { model: ModelMeta; onSave: (m
 }
 
 /**
- * 服务商新增/编辑弹层（V1.1.0 多模型接入）
- * 必填：服务商名称、接口 Base URL；API Key 选填（掩码显示与显隐切换，支持先新增后补密钥）
+ * 服务商新增/编辑弹层（V1.1.0 多模型接入，V1.2.0 交互优化）
+ * 必填：服务商名称、接口 Base URL；API Key 选填（掩码显示与显隐切换，支持先新增后补密钥）；
+ * 新增模式下名称与 Base URL 为带下拉建议的复合输入框：选中预置厂商自动填充名称与官方 Base URL，
+ * 支持手动编辑自定义内容，兼容私有化部署/自定义代理场景；API Key 保持手动填写不预置
  */
 function ProviderEditor({
   provider,
+  presetProviders,
   onSave,
   onCancel
 }: {
   provider: ProviderInfo;
-  onSave: (p: { name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean }) => void;
+  presetProviders: Array<{ id: string; name: string; baseUrl: string; hasFallbackModels: boolean; note?: string }>;
+  onSave: (p: { name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean; presetId?: string }) => void;
   onCancel: () => void;
 }): React.ReactElement {
   const isEdit = !!provider.id;
@@ -500,8 +537,41 @@ function ProviderEditor({
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [clearKey, setClearKey] = useState(false);
+  /** 当前展开的建议下拉（空为收起） */
+  const [openSuggest, setOpenSuggest] = useState<'' | 'name' | 'url'>('');
+  /** 选中的预置厂商 id（随提交上报，服务端据此使用稳定 id 匹配兜底模型数据） */
+  const [selectedPresetId, setSelectedPresetId] = useState('');
   const nameValid = name.trim().length > 0;
   const urlValid = /^https?:\/\/.+/i.test(baseUrl.trim());
+  const selectedPreset = presetProviders.find(p => p.id === selectedPresetId);
+
+  /** 手动编辑后同步校验预置匹配：内容偏离预置配置时清除 presetId，避免误带 */
+  const syncPresetMatch = (nextName: string, nextUrl: string) => {
+    const hit = presetProviders.find(
+      p => p.name === nextName.trim() && p.baseUrl === nextUrl.trim().replace(/\/+$/, '')
+    );
+    setSelectedPresetId(hit ? hit.id : '');
+  };
+
+  const pickPreset = (p: { id: string; name: string; baseUrl: string }, field: 'name' | 'url') => {
+    setOpenSuggest('');
+    if (field === 'name') {
+      // 选中名称建议：名称与官方 Base URL 成对填充，与预置配置完全匹配
+      setName(p.name);
+      setBaseUrl(p.baseUrl);
+      setSelectedPresetId(p.id);
+    } else {
+      // 选中 URL 建议：填充 Base URL，名称为空时同步填充；
+      // 经匹配校验判定 presetId：名称已被用户自定义时不携带预置 id，避免「自定义网关 + 官方兜底模型」错配落库
+      setBaseUrl(p.baseUrl);
+      const nextName = name.trim() ? name : p.name;
+      if (!name.trim()) {
+        setName(p.name);
+      }
+      syncPresetMatch(nextName, p.baseUrl);
+    }
+  };
+
   return (
     <div className="permission-backdrop">
       <div className="model-editor">
@@ -510,22 +580,75 @@ function ProviderEditor({
         </div>
         <Field
           label="服务商名称"
-          tooltip="服务商展示名称，用于设置页分组与底部模型切换下拉框的分组标签，如：月之暗面 Kimi、智谱 AI"
-          hint="必填，任意便于识别的名称"
+          tooltip="服务商展示名称，用于设置页分组与底部模型切换下拉框的服务商标识，如：月之暗面 Kimi、智谱 AI。新增时点击 ▾ 可展开预置厂商快捷选择，也可手动输入任意自定义名称"
+          hint="必填；新增时支持从下拉选择预置厂商自动填充"
         >
-          <input className="text-input" placeholder="如：月之暗面 Kimi" value={name} onChange={e => setName(e.target.value)} />
+          <div className="suggest-wrap">
+            <div className="suggest-input-row">
+              <input
+                className="text-input"
+                placeholder="如：月之暗面 Kimi"
+                value={name}
+                onChange={e => {
+                  setName(e.target.value);
+                  syncPresetMatch(e.target.value, baseUrl);
+                }}
+              />
+              {!isEdit && (
+                <button
+                  type="button"
+                  className={`suggest-btn${openSuggest === 'name' ? ' suggest-btn-on' : ''}`}
+                  title="展开预置服务商建议"
+                  onClick={() => setOpenSuggest(openSuggest === 'name' ? '' : 'name')}
+                >
+                  ▾
+                </button>
+              )}
+            </div>
+            {openSuggest === 'name' && (
+              <PresetSuggestList presets={presetProviders} onPick={p => pickPreset(p, 'name')} onClose={() => setOpenSuggest('')} />
+            )}
+          </div>
         </Field>
         <Field
           label="接口 Base URL"
-          tooltip="OpenAI 兼容协议的接口地址，模型列表与对话请求均基于该地址调用（/models、/chat/completions）"
-          hint="必填，如 https://api.moonshot.cn/v1"
+          tooltip="OpenAI 兼容协议的接口地址，模型列表与对话请求均基于该地址调用（/models、/chat/completions）。新增时点击 ▾ 可展开预置厂商官方地址，也可手动输入私有化部署/自定义代理地址"
+          hint="必填，如 https://api.moonshot.cn/v1；支持手动编辑自定义地址"
         >
-          <input className={`text-input${urlValid ? '' : ' input-invalid'}`} placeholder="如：https://api.moonshot.cn/v1" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
+          <div className="suggest-wrap">
+            <div className="suggest-input-row">
+              <input
+                className={`text-input${urlValid ? '' : ' input-invalid'}`}
+                placeholder="如：https://api.moonshot.cn/v1"
+                value={baseUrl}
+                onChange={e => {
+                  setBaseUrl(e.target.value);
+                  syncPresetMatch(name, e.target.value);
+                }}
+              />
+              {!isEdit && (
+                <button
+                  type="button"
+                  className={`suggest-btn${openSuggest === 'url' ? ' suggest-btn-on' : ''}`}
+                  title="展开预置服务商官方地址"
+                  onClick={() => setOpenSuggest(openSuggest === 'url' ? '' : 'url')}
+                >
+                  ▾
+                </button>
+              )}
+            </div>
+            {openSuggest === 'url' && (
+              <PresetSuggestList presets={presetProviders} onPick={p => pickPreset(p, 'url')} onClose={() => setOpenSuggest('')} />
+            )}
+          </div>
         </Field>
+        {!isEdit && selectedPreset?.note && (
+          <div className="param-warning">⚠ {selectedPreset.note}</div>
+        )}
         <Field
           label="API Key"
-          tooltip="服务商密钥，按服务商独立加密存储于系统密钥库（SecretStorage）。选填：可先新增服务商并查看模型列表，后续补充密钥后再调用；编辑时留空表示保持现有密钥不变"
-          hint={isEdit && provider.hasApiKey ? '已配置密钥：留空保持现状，输入新值覆盖，或勾选清除密钥' : '选填：后续可随时补充'}
+          tooltip="服务商密钥，按服务商独立加密存储于系统密钥库（SecretStorage），不写入任何项目文件与持久化数据。选填：无密钥新增时将使用预置模型列表，后续补充密钥后自动同步最新模型；编辑时留空表示保持现有密钥不变"
+          hint={isEdit && provider.hasApiKey ? '已配置密钥：留空保持现状，输入新值覆盖，或勾选清除密钥' : '选填：无密钥时使用预置模型列表，后续可随时补充'}
         >
           <div className="api-key-row">
             <input
@@ -556,13 +679,53 @@ function ProviderEditor({
           <button
             className="btn btn-primary"
             disabled={!nameValid || !urlValid}
-            onClick={() => onSave({ name: name.trim(), baseUrl: baseUrl.trim(), apiKey: apiKey || undefined, clearApiKey: clearKey || undefined })}
+            onClick={() =>
+              onSave({
+                name: name.trim(),
+                baseUrl: baseUrl.trim(),
+                apiKey: apiKey || undefined,
+                clearApiKey: clearKey || undefined,
+                presetId: !isEdit && selectedPresetId ? selectedPresetId : undefined
+              })
+            }
           >
             {isEdit ? '保存' : '新增并拉取模型'}
           </button>
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * 预置厂商建议下拉列表（V1.2.0 新增服务商交互优化）：
+ * 展示厂商名称 + 官方 Base URL，点击选中自动填充；透明遮罩实现点击外部关闭
+ */
+function PresetSuggestList({
+  presets,
+  onPick,
+  onClose
+}: {
+  presets: Array<{ id: string; name: string; baseUrl: string; hasFallbackModels: boolean; note?: string }>;
+  onPick: (p: { id: string; name: string; baseUrl: string }) => void;
+  onClose: () => void;
+}): React.ReactElement {
+  return (
+    <>
+      <div className="suggest-backdrop" onClick={onClose} />
+      <div className="suggest-list">
+        {presets.map(p => (
+          <div key={p.id} className="suggest-item" onClick={() => onPick(p)} title={p.note ?? p.baseUrl}>
+            <span className="suggest-item-name">
+              {p.name}
+              {p.hasFallbackModels && <span className="suggest-item-tag">预置模型</span>}
+            </span>
+            <span className="suggest-item-url">{p.baseUrl}</span>
+          </div>
+        ))}
+        <div className="suggest-item suggest-item-hint">选择后自动填充名称与官方 Base URL，仍可手动修改为自定义内容</div>
+      </div>
+    </>
   );
 }
 

@@ -1581,6 +1581,110 @@ button {
   align-self: flex-start;
 }
 
+/* V1.2.0 新增服务商弹窗：预置厂商下拉建议复合输入框 */
+.suggest-wrap {
+  position: relative;
+}
+
+.suggest-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.suggest-input-row .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.suggest-btn {
+  flex-shrink: 0;
+  width: 30px;
+  padding: 5px 0;
+  background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 4px;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.suggest-btn:hover,
+.suggest-btn-on {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+
+/* 透明遮罩：点击下拉外部区域关闭建议列表 */
+.suggest-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.suggest-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 91;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: 5px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.suggest-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--vscode-widget-border, transparent);
+}
+
+.suggest-item:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.suggest-item-name {
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.suggest-item-tag {
+  font-size: 10px;
+  font-weight: 500;
+  color: #2e8b57;
+  background: rgba(46, 139, 87, 0.15);
+  padding: 0 6px;
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
+.suggest-item-url {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  word-break: break-all;
+}
+
+.suggest-item-hint {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  cursor: default;
+  border-bottom: none;
+  line-height: 1.5;
+}
+
+.suggest-item-hint:hover {
+  background: transparent;
+}
+
 .model-editor {
   width: min(460px, 94%);
   background: var(--vscode-editor-background);

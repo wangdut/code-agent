@@ -97,7 +97,7 @@ export class WebviewController {
           await this.service.handleSelectSession(this, msg.sessionId);
           break;
         case 'session:setModel':
-          this.service.handleSetSessionModel(this, msg.sessionId, msg.modelId);
+          await this.service.handleSetSessionModel(this, msg.sessionId, msg.modelId);
           break;
         case 'session:rename':
           await this.service.handleRenameSession(this, msg.sessionId, msg.title);
@@ -127,7 +127,7 @@ export class WebviewController {
           await this.service.handleModelDelete(this, msg.modelId);
           break;
         case 'provider:add':
-          await this.service.handleProviderAdd(this, msg.name, msg.baseUrl, msg.apiKey);
+          await this.service.handleProviderAdd(this, msg.name, msg.baseUrl, msg.apiKey, msg.presetId);
           break;
         case 'provider:update':
           await this.service.handleProviderUpdate(this, msg.id, msg.name, msg.baseUrl, msg.apiKey, msg.clearApiKey);

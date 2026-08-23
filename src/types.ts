@@ -221,6 +221,13 @@ export interface SettingsSnapshot {
   apiKeyConfigured: boolean;
   /** 已添加的模型服务商（V1.1.0 服务商-模型两级体系） */
   providers: ProviderInfo[];
+  /** 当前生效的默认服务商 id（V1.2.0 主界面模型下拉框与默认模型联动基准） */
+  defaultProvider: string;
+  /**
+   * 预置厂商目录（V1.2.0）：主流 OpenAI 兼容厂商官方配置 + 兜底模型数量标记，
+   * 供新增服务商弹窗下拉建议快速选择；仅含非敏感信息（名称/Base URL）
+   */
+  presetProviders: Array<{ id: string; name: string; baseUrl: string; hasFallbackModels: boolean; note?: string }>;
   models: ModelMeta[];
   defaultModel: string;
   defaultMode: RunMode;
@@ -284,7 +291,7 @@ export type WebviewToExtensionMessage =
   | { type: 'model:add'; model: ModelMeta }
   | { type: 'model:update'; oldId: string; model: ModelMeta }
   | { type: 'model:delete'; modelId: string }
-  | { type: 'provider:add'; name: string; baseUrl: string; apiKey?: string }
+  | { type: 'provider:add'; name: string; baseUrl: string; apiKey?: string; presetId?: string }
   | { type: 'provider:update'; id: string; name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean }
   | { type: 'provider:delete'; id: string }
   | { type: 'provider:refresh'; id: string }

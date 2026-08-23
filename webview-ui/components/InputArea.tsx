@@ -10,8 +10,10 @@ import { post } from '../vscode';
 
 interface Props {
   models: ModelMeta[];
-  /** 服务商列表（模型切换下拉框按服务商分组展示） */
+  /** 服务商列表（模型切换下拉框与当前生效服务商绑定） */
   providers: ProviderInfo[];
+  /** 当前生效的默认服务商 id（V1.2.0 下拉框仅展示该服务商的模型） */
+  defaultProvider: string;
   modelId: string;
   mode: RunMode;
   permissionMode: 'ask' | 'auto';
@@ -98,30 +100,18 @@ export function InputArea(props: Props): React.ReactElement {
     return pickerItems.filter(p => p.toLowerCase().includes(q));
   }, [pickerItems, pickerQuery]);
 
-  /** 模型按服务商分组（V1.1.0 多模型体系：底部切换下拉框按服务商分组展示全部模型） */
-  const providerGroups = useMemo(() => {
-    const groups: { label: string; models: ModelMeta[] }[] = [];
-    const byProvider = new Map<string, ModelMeta[]>();
-    for (const m of props.models) {
-      const pid = m.providerId ?? 'deepseek';
-      if (!byProvider.has(pid)) {
-        byProvider.set(pid, []);
-      }
-      byProvider.get(pid)!.push(m);
-    }
-    for (const p of props.providers) {
-      const list = byProvider.get(p.id);
-      if (list && list.length > 0) {
-        groups.push({ label: p.name, models: list });
-        byProvider.delete(p.id);
-      }
-    }
-    // 归属未知服务商的遗留缓存模型兜底分组
-    for (const [pid, list] of byProvider) {
-      groups.push({ label: pid, models: list });
-    }
-    return groups;
-  }, [props.models, props.providers]);
+  /**
+   * 当前生效服务商的模型列表（V1.2.0 服务商联动）：
+   * 底部切换下拉框与当前生效服务商绑定，仅展示该服务商下的模型，不同服务商分区不混杂；
+   * 切换服务商入口在设置页「默认服务商」，切换模型后扩展侧会同步更新默认服务商
+   */
+  const activeProviderId = props.defaultProvider || 'deepseek';
+  const activeProvider = props.providers.find(p => p.id === activeProviderId);
+  const currentModels = useMemo(
+    () => props.models.filter(m => (m.providerId ?? 'deepseek') === activeProviderId),
+    [props.models, activeProviderId]
+  );
+  const currentModelInList = currentModels.some(m => m.id === props.modelId);
 
   // 选择文件
   const pickFile = (path: string) => {
@@ -251,27 +241,17 @@ export function InputArea(props: Props): React.ReactElement {
             className="model-select"
             value={props.modelId}
             onChange={e => props.onModelChange(e.target.value)}
-            title="切换模型（按服务商分组，即时生效，不丢失上下文）"
+            title={`切换模型：当前展示服务商「${activeProvider?.name ?? activeProviderId}」的模型（即时生效，不丢失上下文）；切换其他服务商请在设置页选择默认服务商`}
           >
-            {props.models.length === 0 && <option value={props.modelId}>{props.modelId || '暂无可用模型'}</option>}
-            {!props.models.some(m => m.id === props.modelId) && props.models.length > 0 && (
-              <option value={props.modelId}>{props.modelId}</option>
+            {currentModels.length === 0 && !props.modelId && <option value="">暂无可用模型</option>}
+            {!currentModelInList && props.modelId && (
+              <option value={props.modelId}>{props.modelId}（当前使用·其他服务商）</option>
             )}
-            {providerGroups.length > 1
-              ? providerGroups.map(g => (
-                  <optgroup key={g.label} label={g.label}>
-                    {g.models.map(m => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))
-              : providerGroups[0]?.models.map(m => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
+            {currentModels.map(m => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
           </select>
           <select
             className="mode-select"

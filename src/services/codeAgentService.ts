@@ -10,7 +10,7 @@ import {
   AttachedFileRef, ChatMessage, DailyUsage, ExtensionToWebviewMessage, ModelMeta,
   PermissionRequest, ProviderInfo, RunMode, Session, SessionContextStats, SessionListItem
 } from '../types';
-import { ConfigManager, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS, PRESET_PROVIDER_ID } from '../config/configManager';
+import { ConfigManager, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS, PRESET_PROVIDER_CATALOG, PRESET_PROVIDER_ID } from '../config/configManager';
 import { SecurityManager } from '../security/securityManager';
 import { AuditLogger } from '../security/auditLogger';
 import { SessionManager } from '../sessions/sessionManager';
@@ -774,7 +774,7 @@ export class CodeAgentService {
   }
 
   /** 会话切换模型：持久化 modelId 并按新模型窗口口径刷新 Token 统计 */
-  handleSetSessionModel(controller: WebviewController, sessionId: string, modelId: string): void {
+  async handleSetSessionModel(controller: WebviewController, sessionId: string, modelId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return;
@@ -784,6 +784,13 @@ export class CodeAgentService {
       return;
     }
     session.modelId = modelId;
+    // V1.2.0 服务商联动：切换模型后默认服务商跟随该模型所属服务商，底部下拉框与实际使用模型保持一致；
+    // 写入完成后立即广播最新设置，避免 WebView 侧停留在旧服务商导致下拉框过滤不刷新
+    const model = this.config.getModel(modelId);
+    if (model?.providerId && model.providerId !== this.config.getDefaultProvider()) {
+      await this.config.updateSetting('defaultProvider', model.providerId);
+      this.broadcastSettings();
+    }
     // Tokenizer 口径随模型变化，上一次真实校准值失效，回退启发式估算
     delete session.lastPromptTokens;
     delete session.lastStatsMessageCount;
@@ -892,17 +899,33 @@ export class CodeAgentService {
   }
 
   /**
-   * 拉取指定服务商的模型列表并同步到本地缓存。
+   * 拉取指定服务商的模型列表并同步到本地缓存（V1.2.0 重构）。
+   * 无密钥且预置兜底数据存在时：直接以官方标准模型列表兜底（多数厂商 /models 需鉴权，无密钥拉取无意义）；
    * 成功：整体替换该服务商模型（用户校准过的元数据保留），记录同步时间；
-   * 失败：保留本地缓存（离线兑底），记录错误原因供设置页展示。
-   * 未配置 API Key 且接口要求鉴权（401/403）时静默跳过，不标记为错误。
+   * 失败：保留本地缓存（离线兜底），记录分类后的错误原因供设置页展示；
+   * 未配置 API Key 且接口要求鉴权（401/403）且无兜底数据时静默跳过，不标记为错误。
    */
-  async syncProviderModels(providerId: string): Promise<{ ok: boolean; error?: string }> {
-    const provider = this.config.getProvider(providerId);
+  async syncProviderModels(providerId: string): Promise<{ ok: boolean; error?: string; usedFallback?: boolean }> {
+    let provider = this.config.getProvider(providerId);
     if (!provider) {
-      return { ok: false, error: '服务商不存在' };
+      // 配置传播延迟兜底：重读一次服务商列表再判定，避免误报「服务商不存在」
+      provider = this.config.getProviders().find(p => p.id === providerId);
+    }
+    if (!provider) {
+      return { ok: false, error: '服务商配置未持久化，请重试；如反复出现，请检查工作区设置是否锁定了 codeAgent.providers 配置项' };
     }
     const apiKey = await this.config.getProviderApiKey(providerId);
+    const fallbacks = this.config.getProviderFallbackModels(providerId);
+    // 无密钥 + 存在预置兜底模型：仅在该服务商无模型缓存时以官方标准列表兜底入库（不覆盖用户手动添加的自定义模型），配置密钥后动态拉取自动覆盖；
+    // 兜底未发生真实网络拉取，不记录 lastSyncAt，避免设置页展示误导性的同步时间
+    if (!apiKey && fallbacks.length > 0) {
+      const cached = this.config.getModels().filter(m => m.providerId === providerId);
+      if (cached.length === 0) {
+        await this.config.replaceProviderModels(providerId, fallbacks);
+      }
+      await this.followDefaultModel();
+      return { ok: true, usedFallback: true };
+    }
     let fetched: ModelMeta[];
     try {
       const adapter = this.adapters.create({
@@ -915,7 +938,7 @@ export class CodeAgentService {
         throw new Error('当前适配器不支持模型列表接口');
       }
       const items = await adapter.listModels();
-      // 元数据兑底：接口未返回元数据时套用全局默认（300k 上下文 / 100k 输出）
+      // 元数据兜底：接口未返回元数据时套用全局默认（300k 上下文 / 100k 输出）
       fetched = items.map(it => ({
         id: it.id,
         name: humanizeModelName(it.id),
@@ -931,17 +954,24 @@ export class CodeAgentService {
         this.config.setProviderSyncState(providerId, {});
         return { ok: false };
       }
-      this.config.setProviderSyncState(providerId, { syncError: msg });
-      return { ok: false, error: msg };
+      const friendly = classifySyncError(msg);
+      this.config.setProviderSyncState(providerId, { syncError: friendly });
+      return { ok: false, error: friendly };
     }
     await this.config.replaceProviderModels(providerId, fetched);
     this.config.setProviderSyncState(providerId, { lastSyncAt: Date.now() });
-    // 默认模型跟随：当前 defaultModel 不在新列表中时回退为列表首个模型
+    await this.followDefaultModel();
+    return { ok: true };
+  }
+  
+  /** 默认模型跟随：当前 defaultModel 不在模型列表中时回退，优先取默认服务商名下首个模型，避免默认模型与默认服务商分属不同服务商的悬空态 */
+  private async followDefaultModel(): Promise<void> {
     const list = this.config.getModels();
     if (!list.some(m => m.id === this.config.getRawDefaultModel())) {
-      await this.config.updateSettings({ defaultModel: list[0]?.id ?? '' });
+      const defaultProviderId = this.config.getDefaultProvider();
+      const candidate = list.find(m => m.providerId === defaultProviderId) ?? list[0];
+      await this.config.updateSettings({ defaultModel: candidate?.id ?? '' });
     }
-    return { ok: true };
   }
 
   // ---------- 服务商管理 ----------
@@ -957,23 +987,37 @@ export class CodeAgentService {
     return undefined;
   }
 
-  async handleProviderAdd(controller: WebviewController, name: string, baseUrl: string, apiKey?: string): Promise<void> {
+  async handleProviderAdd(controller: WebviewController, name: string, baseUrl: string, apiKey?: string, presetId?: string): Promise<void> {
     const invalid = this.validateProviderInput(name, baseUrl);
     if (invalid) {
       controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: invalid });
       return;
     }
-    const id = randomId();
+    // V1.2.0 预置厂商快捷接入：从下拉建议选中的预置厂商使用稳定 id（匹配官方兜底模型数据），其余随机 id
+    const catalogHit = presetId ? PRESET_PROVIDER_CATALOG.find(p => p.id === presetId) : undefined;
+    const id = catalogHit ? catalogHit.id : randomId();
+    if (this.config.getProvider(id)) {
+      controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: `服务商「${this.config.getProvider(id)?.name ?? name}」已添加，请在服务商列表中直接编辑或刷新模型` });
+      return;
+    }
     await this.config.addProvider({ id, name: name.trim(), baseUrl: baseUrl.trim().replace(/\/+$/, '') });
-    if (apiKey !== undefined && apiKey.trim()) {
-      await this.config.setProviderApiKey(id, apiKey);
+    const hasKey = apiKey !== undefined && apiKey.trim().length > 0;
+    if (hasKey) {
+      await this.config.setProviderApiKey(id, apiKey as string);
     }
     await this.sendSettings(controller);
-    // 新增完成后立即拉取该服务商模型列表（失败不阻断：服务商已保存，可后续补密钥重试）
+    // 新增完成后立即拉取该服务商模型列表（无密钥时使用预置兜底列表，拉取失败返回精准错误原因）
     const res = await this.syncProviderModels(id);
     await this.sendSettings(controller);
     this.broadcastSettings();
-    if (!res.ok && res.error) {
+    if (res.ok && res.usedFallback) {
+      void vscode.window.showInformationMessage(`「${name.trim()}」已添加：未配置 API 密钥，使用预置模型列表；配置密钥后可自动同步最新模型`);
+      if (catalogHit?.note) {
+        void vscode.window.showWarningMessage(`「${name.trim()}」接入提示：${catalogHit.note}`);
+      }
+    } else if (res.ok) {
+      void vscode.window.showInformationMessage(`「${name.trim()}」已添加，模型列表同步成功`);
+    } else if (res.error) {
       controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: `服务商已添加，但模型列表拉取失败：${res.error}` });
     }
   }
@@ -998,15 +1042,17 @@ export class CodeAgentService {
     }
     const baseUrlChanged = provider.baseUrl !== baseUrl.trim().replace(/\/+$/, '');
     await this.config.updateProvider(id, { name: name.trim(), baseUrl: baseUrl.trim().replace(/\/+$/, '') });
-    if (apiKey !== undefined && apiKey.trim()) {
-      await this.config.setProviderApiKey(id, apiKey);
-    }
+    // V1.2.0 密钥清除专属分支：先彻底删除旧密钥（含预置服务商的旧全局密钥回退源），再写入新密钥，避免清除失效
     if (clearApiKey) {
-      await this.config.deleteProviderApiKey(id);
+      await this.config.clearProviderApiKey(id);
+    }
+    const hasNewKey = apiKey !== undefined && apiKey.trim().length > 0;
+    if (hasNewKey) {
+      await this.config.setProviderApiKey(id, apiKey as string);
     }
     await this.sendSettings(controller);
-    // 修改 Base URL 后自动重新拉取模型列表
-    if (baseUrlChanged) {
+    // 修改 Base URL 或密钥状态变化（新配置/清除后补新值）后自动重新拉取模型列表（动态拉取覆盖兜底数据）
+    if (baseUrlChanged || clearApiKey || hasNewKey) {
       await this.syncProviderModels(id);
       await this.sendSettings(controller);
     }
@@ -1024,12 +1070,9 @@ export class CodeAgentService {
     }
     await this.config.deleteProvider(id);
     await this.config.removeProviderModels(id);
-    await this.config.deleteProviderApiKey(id);
+    await this.config.clearProviderApiKey(id);
     // 默认模型跟随：被删服务商的模型为默认模型时回退为剩余列表首个模型
-    const list = this.config.getModels();
-    if (!list.some(m => m.id === this.config.getRawDefaultModel())) {
-      await this.config.updateSettings({ defaultModel: list[0]?.id ?? '' });
-    }
+    await this.followDefaultModel();
     await this.sendSettings(controller);
     this.broadcastSettings();
   }
@@ -1045,6 +1088,8 @@ export class CodeAgentService {
     this.broadcastSettings();
     if (!res.ok && res.error) {
       controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: `模型列表拉取失败：${res.error}` });
+    } else if (res.ok && res.usedFallback) {
+      void vscode.window.showInformationMessage(`未配置 API 密钥，已使用预置模型列表；配置密钥后再次刷新可同步最新模型`);
     } else if (res.ok) {
       void vscode.window.showInformationMessage(`「${this.config.getProvider(id)?.name}」模型列表已同步`);
     }
@@ -1129,4 +1174,24 @@ function humanizeModelName(id: string): string {
     return id;
   }
   return tokens.map(t => (t[0] ? t[0].toUpperCase() + t.slice(1) : t)).join(' ');
+}
+
+/**
+ * 模型列表拉取错误分类（V1.2.0）：将原始错误信息归类为鉴权失败/接口不兼容/网络异常，
+ * 返回可定位问题原因的精准提示，不再笼统报错
+ */
+function classifySyncError(msg: string): string {
+  if (/\b(401|403)\b/.test(msg) || /unauthorized|forbidden|invalid.*key|api.?key/i.test(msg)) {
+    return `鉴权失败：API Key 未配置或无效（${msg}）`;
+  }
+  if (/\b404\b/.test(msg) || /not found/i.test(msg)) {
+    return `接口不兼容：Base URL 下未找到 /models 接口（${msg}），请核实地址与协议兼容性`;
+  }
+  if (/超时|timeout|timed out/i.test(msg)) {
+    return `网络异常：模型列表请求超时（${msg}），可检查代理配置后重试`;
+  }
+  if (/ECONNREFUSED|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|网络请求失败/i.test(msg)) {
+    return `网络异常：无法连接服务商接口（${msg}）`;
+  }
+  return msg;
 }

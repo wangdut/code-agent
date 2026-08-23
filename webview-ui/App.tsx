@@ -542,6 +542,7 @@ export function App(): React.ReactElement {
           <InputArea
             models={settings.models}
             providers={settings.providers}
+            defaultProvider={settings.defaultProvider}
             modelId={activeSession.modelId || sessionModel?.id || settings.defaultModel}
             mode={activeSession.mode || settings.defaultMode}
             permissionMode={settings.permissionMode}
