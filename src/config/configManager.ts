@@ -59,7 +59,8 @@ export const PRESET_PROVIDER_CATALOG: PresetProviderCatalogItem[] = [
     fallbackModels: [
       { id: 'glm-4-flash', name: 'GLM-4 Flash（轻量高速）', contextWindow: 128000, maxOutputTokens: 4096 },
       { id: 'glm-4-air', name: 'GLM-4 Air（均衡）', contextWindow: 128000, maxOutputTokens: 4096 },
-      { id: 'glm-4-plus', name: 'GLM-4 Plus（旗舰）', contextWindow: 128000, maxOutputTokens: 4096 }
+      { id: 'glm-4-plus', name: 'GLM-4 Plus（旗舰）', contextWindow: 128000, maxOutputTokens: 4096 },
+      { id: 'glm-4v-flash', name: 'GLM-4V Flash（视觉）', contextWindow: 128000, maxOutputTokens: 4096, multimodal: true }
     ]
   },
   {
@@ -67,6 +68,8 @@ export const PRESET_PROVIDER_CATALOG: PresetProviderCatalogItem[] = [
     name: '月之暗面 Kimi',
     baseUrl: 'https://api.moonshot.cn/v1',
     fallbackModels: [
+      { id: 'kimi-k3', name: 'Kimi K3（旗舰·原生多模态）', contextWindow: 1000000, maxOutputTokens: 8192, multimodal: true },
+      { id: 'moonshot-v1-8k-vision-preview', name: 'Moonshot v1 8K Vision（视觉）', contextWindow: 8192, maxOutputTokens: 8192, multimodal: true },
       { id: 'moonshot-v1-8k', name: 'Moonshot v1 8K', contextWindow: 8192, maxOutputTokens: 8192 },
       { id: 'moonshot-v1-32k', name: 'Moonshot v1 32K', contextWindow: 32768, maxOutputTokens: 8192 },
       { id: 'moonshot-v1-128k', name: 'Moonshot v1 128K（长上下文）', contextWindow: 131072, maxOutputTokens: 8192 }
@@ -79,7 +82,8 @@ export const PRESET_PROVIDER_CATALOG: PresetProviderCatalogItem[] = [
     fallbackModels: [
       { id: 'qwen-turbo', name: 'Qwen Turbo（高速）', contextWindow: 131072, maxOutputTokens: 8192 },
       { id: 'qwen-plus', name: 'Qwen Plus（均衡）', contextWindow: 131072, maxOutputTokens: 8192 },
-      { id: 'qwen-max', name: 'Qwen Max（旗舰）', contextWindow: 32768, maxOutputTokens: 8192 }
+      { id: 'qwen-max', name: 'Qwen Max（旗舰）', contextWindow: 32768, maxOutputTokens: 8192 },
+      { id: 'qwen-vl-max', name: 'Qwen VL Max（视觉）', contextWindow: 32768, maxOutputTokens: 8192, multimodal: true }
     ]
   },
   {
@@ -88,7 +92,8 @@ export const PRESET_PROVIDER_CATALOG: PresetProviderCatalogItem[] = [
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     fallbackModels: [
       { id: 'doubao-lite-32k', name: '豆包 Lite 32K', contextWindow: 32768, maxOutputTokens: 4096 },
-      { id: 'doubao-pro-32k', name: '豆包 Pro 32K', contextWindow: 32768, maxOutputTokens: 4096 }
+      { id: 'doubao-pro-32k', name: '豆包 Pro 32K', contextWindow: 32768, maxOutputTokens: 4096 },
+      { id: 'doubao-vision-pro-32k', name: '豆包 Vision Pro 32K（视觉）', contextWindow: 32768, maxOutputTokens: 4096, multimodal: true }
     ]
   },
   {

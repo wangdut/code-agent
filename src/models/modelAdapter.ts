@@ -197,6 +197,30 @@ function rateLimitWaitSeconds(errMsg: string): number {
   return Math.min(Math.max(v, 1), 10);
 }
 
+/**
+ * 已知视觉模型 ID 模式（策划式保守匹配，厂商无关兜底）：
+ * 多家服务商（月之暗面/智谱/通义/豆包/OpenAI/Anthropic）官方文档声明视觉模型，
+ * 但 /models 接口不返回能力元数据，四路元数据探测全落空时按 ID 模式兜底识别；不命中一律视为不支持（保守，宁漏勿错）。
+ * 覆盖（均依官方文档）：通用含 vision 的 ID（doubao-vision-*、gpt-4-vision-preview、moonshot-v1-*-vision-preview）；
+ * 月之暗面 kimi-k3/kimi-k2.5+/kimi-latest；智谱 GLM-4V/GLM-4.xV 系；通义 qwen-vl/qwen2.x-vl/QVQ 系；
+ * OpenAI gpt-4o/gpt-4.1/gpt-4-turbo/gpt-5/o3(非 mini)/o4 系；Anthropic Claude 3+/Claude *-4 系。
+ * 明确排除（纯文本，不命中）：kimi-k2 基础系、glm-4/glm-4.5 文本系、qwen-plus/max/turbo、
+ * o1/o1-mini/o3-mini、gpt-4 基础系、gpt-3.5、claude-2 系
+ */
+const KNOWN_VISION_ID_RE = new RegExp(
+  [
+    'vision', // 通用视觉标记（ID 含 vision 的模型几乎均为视觉模型）
+    '^kimi-(k3|latest|k2\\.([5-9]|\\d{2,}))([-._]|$)', // 月之暗面官方视觉系
+    'glm-[\\d.]+v([-._]|$)', // 智谱 GLM-4V / GLM-4.5V / GLM-4.6V 系
+    '-vl([-._]|$)|-vl-', // 通义 qwen-vl-max / qwen2.5-vl-72b-instruct
+    '^qvq', // 通义 QVQ 视觉推理系
+    'gpt-4o|gpt-4\\.1|gpt-4-turbo|gpt-5', // OpenAI 视觉系
+    '(^|-)o3(-\\d|-pro|$)|(^|-)o4(-|$)', // OpenAI o3/o3-pro/o4/o4-mini（排除 o3-mini）
+    'claude-(3|sonnet-4|opus-4|haiku-4)' // Anthropic Claude 3+ / Claude *-4 系
+  ].join('|'),
+  'i'
+);
+
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 /**
@@ -566,12 +590,13 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       if (typeof mo === 'number' && mo > 0) {
         entry.maxOutputTokens = mo;
       }
-      // 多模态能力探测（厂商无关，尽力而为）：capabilities 含 vision / modalities 含 image / 显式布尔字段
+      // 多模态能力探测（厂商无关，尽力而为）：capabilities 含 vision / modalities 含 image / 显式布尔字段 / 已知视觉模型 ID 模式兜底
       if (
         (Array.isArray(it?.capabilities) && it.capabilities.some((c: unknown) => String(c).toLowerCase().includes('vision'))) ||
         (Array.isArray(it?.modalities) && it.modalities.some((x: unknown) => /image/.test(String(x).toLowerCase()))) ||
         it?.supports_vision === true ||
-        it?.vision === true
+        it?.vision === true ||
+        KNOWN_VISION_ID_RE.test(id)
       ) {
         entry.multimodal = true;
       }
