@@ -145,6 +145,57 @@ function fetchJson(url: string, init: { method?: string; headers?: Record<string
 }
 
 /**
+ * 服务商参数兼容记忆（模块级，扩展宿主进程生命周期内有效，厂商无关）：
+ * 记录某 Base URL 曾被 400 拒绝的请求字段（stream_options / temperature / top_p / frequency_penalty / tool_choice），
+ * 后续请求主动省略，避免「每次请求都试错」。严格 RPM 限额下（如月之暗面免费额度 org max RPM 3）
+ * 试错重试会使单次对话消耗双倍配额、立即触发 429；按 Base URL 记忆可让同服务商下所有模型一次学习、全程受益
+ */
+const paramCompatMemory = new Map<string, Set<string>>();
+
+function rememberIncompat(baseUrl: string, keys: string[]): void {
+  if (keys.length === 0) {
+    return;
+  }
+  let set = paramCompatMemory.get(baseUrl);
+  if (!set) {
+    set = new Set();
+    paramCompatMemory.set(baseUrl, set);
+  }
+  for (const k of keys) {
+    set.add(k);
+  }
+}
+
+/**
+ * 将 400 错误报文映射为请求体中不被支持的字段（厂商无关的关键词匹配，覆盖主流 OpenAI 兼容服务）
+ * 零负优化约定：仅在服务商明确以 400 拒绝某字段时才记忆省略；无限额/全兼容服务商（如 DeepSeek）
+ * 不会触发任何记忆与重试，请求体与历史版本逐字节一致；记忆按 Base URL 隔离，服务商间互不影响
+ */
+function incompatibleKeys(errMsg: string, body: Record<string, unknown>): string[] {
+  const lower = errMsg.toLowerCase();
+  const keys: string[] = [];
+  if (body.stream_options !== undefined && lower.includes('stream_options')) keys.push('stream_options');
+  if (body.temperature !== undefined && lower.includes('temperature')) keys.push('temperature');
+  // top_p 兼容 top_p / topp 两种报错拼写；词边界匹配防止 stopped 等单词子串误伤
+  if (body.top_p !== undefined && (lower.includes('top_p') || /\btopp\b/.test(lower))) keys.push('top_p');
+  if (body.frequency_penalty !== undefined && lower.includes('frequency_penalty')) keys.push('frequency_penalty');
+  if (body.tool_choice !== undefined && lower.includes('tool_choice')) keys.push('tool_choice');
+  return keys;
+}
+
+/** 解析 429 限流报文中的重试等待秒数（如 "try again after 1 seconds"）；无法解析默认 2s，上下限 1–10s */
+function rateLimitWaitSeconds(errMsg: string): number {
+  const m = /after\s+(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s\b)/i.exec(errMsg) ?? /retry[ -]?after[^\d]{0,4}(\d+(?:\.\d+)?)/i.exec(errMsg);
+  const v = m ? Number(m[1]) : NaN;
+  if (!Number.isFinite(v) || v <= 0) {
+    return 2;
+  }
+  return Math.min(Math.max(v, 1), 10);
+}
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+/**
  * OpenAI 协议适配器
  * 兼容 DeepSeek 及所有 OpenAI 协议兼容服务
  */
@@ -180,6 +231,13 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     if (opts.topP !== undefined) body.top_p = opts.topP;
     if (opts.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
     if (opts.frequencyPenalty !== undefined) body.frequency_penalty = opts.frequencyPenalty;
+    // 主动省略该 Base URL 已记忆的不兼容字段（兼容记忆），避免逐请求试错浪费配额
+    const learnedDrop = paramCompatMemory.get(this.baseUrl);
+    if (learnedDrop) {
+      for (const k of learnedDrop) {
+        delete body[k];
+      }
+    }
 
     // 增量解析 SSE 流（边下载边解析，实时回传文本并支持即时中止）
     let content = '';
@@ -262,28 +320,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       parseLines();
     };
 
-    let { status, raw, json } = await fetchJson(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: this.buildHeaders(),
-      body: JSON.stringify(body),
-      timeout: this.timeout,
-      proxy: this.proxy,
-      signal: opts.signal,
-      onData
-    });
-
-    // 部分服务商不支持 stream_options 字段，自动降级重试（重试同样走增量解析）
-    if (status === 400 && String(json?.error?.message ?? raw ?? '').toLowerCase().includes('stream_options')) {
-      delete body.stream_options;
-      // 重置解析状态：第一次请求的错误响应已进入 buffer，避免污染重试流
-      buffer = '';
-      content = '';
-      reasoning = '';
-      toolCalls.clear();
-      readyNotified.clear();
-      usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-      finishReason = '';
-      const retry = await fetchJson(`${this.baseUrl}/chat/completions`, {
+    const doFetch = () =>
+      fetchJson(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: this.buildHeaders(),
         body: JSON.stringify(body),
@@ -292,9 +330,42 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         signal: opts.signal,
         onData
       });
-      status = retry.status;
-      raw = retry.raw;
-      json = retry.json;
+
+    /** 重置增量解析状态：上一次请求的错误响应已进入 buffer，避免污染重试流 */
+    const resetStreamState = () => {
+      buffer = '';
+      content = '';
+      reasoning = '';
+      toolCalls.clear();
+      readyNotified.clear();
+      usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      finishReason = '';
+    };
+
+    let { status, raw, json } = await doFetch();
+
+    // 参数兼容降级（厂商无关）：400 时将错误报文映射为不支持字段，记入兼容记忆并省略后重试一次；
+    // 后续请求按记忆主动省略，进程生命周期内仅本次试错（如 Kimi K2 限定 temperature、部分服务不支持 stream_options）
+    const badKeys = incompatibleKeys(String(json?.error?.message ?? raw ?? ''), body);
+    if (status === 400 && badKeys.length > 0) {
+      rememberIncompat(this.baseUrl, badKeys);
+      for (const k of badKeys) {
+        delete body[k];
+      }
+      resetStreamState();
+      ({ status, raw, json } = await doFetch());
+    }
+
+    // 429 限流退避重试：部分服务商对组织/免费额度有严格 RPM 限制（如月之暗面 org max RPM 3），
+    // 按错误提示秒数等待后自动重试（至多 2 次），避免瞬时限流直接报错打断对话
+    for (let attempt = 0; status === 429 && attempt < 2; attempt++) {
+      const waitSec = rateLimitWaitSeconds(String(json?.error?.message ?? raw ?? ''));
+      await sleep(Math.round(waitSec * 1000));
+      if (opts.signal?.aborted) {
+        throw new Error('aborted');
+      }
+      resetStreamState();
+      ({ status, raw, json } = await doFetch());
     }
 
     if (status === 0) {
@@ -329,15 +400,43 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     };
     if (opts.temperature !== undefined) body.temperature = opts.temperature;
     if (opts.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+    const learnedDrop = paramCompatMemory.get(this.baseUrl);
+    if (learnedDrop) {
+      for (const k of learnedDrop) {
+        delete body[k];
+      }
+    }
 
-    const { status, json, raw } = await fetchJson(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: this.buildHeaders(),
-      body: JSON.stringify(body),
-      timeout: this.timeout,
-      proxy: this.proxy,
-      signal: opts.signal
-    });
+    const doFetch = () =>
+      fetchJson(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify(body),
+        timeout: this.timeout,
+        proxy: this.proxy,
+        signal: opts.signal
+      });
+
+    let { status, json, raw } = await doFetch();
+
+    // 参数兼容降级：400 映射不支持字段 → 记入兼容记忆 + 省略重试一次（与流式链路共享记忆）
+    const badKeys = incompatibleKeys(String(json?.error?.message ?? raw ?? ''), body);
+    if (status === 400 && badKeys.length > 0) {
+      rememberIncompat(this.baseUrl, badKeys);
+      for (const k of badKeys) {
+        delete body[k];
+      }
+      ({ status, json, raw } = await doFetch());
+    }
+
+    // 429 限流退避重试（至多 2 次），与流式链路同一策略
+    for (let attempt = 0; status === 429 && attempt < 2; attempt++) {
+      await sleep(Math.round(rateLimitWaitSeconds(String(json?.error?.message ?? raw ?? '')) * 1000));
+      if (opts.signal?.aborted) {
+        throw new Error('aborted');
+      }
+      ({ status, json, raw } = await doFetch());
+    }
 
     if (status !== 200) {
       const msg = json?.error?.message ?? json?.message ?? raw?.slice(0, 500) ?? `HTTP ${status}`;

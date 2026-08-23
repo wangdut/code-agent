@@ -16,8 +16,12 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
   const [form, setForm] = useState<SettingsSnapshot>(settings);
   const [editingModel, setEditingModel] = useState<ModelMeta | null>(null);
   const [editingProvider, setEditingProvider] = useState<ProviderInfo | null>(null);
-  /** 模型参数配置区当前选中的服务商（服务商管理区下方） */
-  const [selectedProviderId, setSelectedProviderId] = useState(settings.providers[0]?.id ?? '');
+  /** 模型参数配置区当前选中的服务商（服务商管理区下方）；初始跟随全局默认服务商，避免每次打开重置回首个预置 */
+  const [selectedProviderId, setSelectedProviderId] = useState(
+    settings.providers.some(p => p.id === settings.defaultProvider)
+      ? settings.defaultProvider
+      : settings.providers[0]?.id ?? ''
+  );
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
