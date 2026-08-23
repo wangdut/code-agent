@@ -69,6 +69,8 @@ export interface ModelAdapter {
   chat(opts: ChatRequestOptions): Promise<{ content: string; usage: TokenUsage }>;
   /** 查询账户余额（部分服务商支持） */
   queryBalance(): Promise<string>;
+  /** 拉取服务商模型列表（OpenAI 兼容 /models 接口，部分服务商可能不支持） */
+  listModels?(): Promise<Array<{ id: string; contextWindow?: number; maxOutputTokens?: number }>>;
 }
 
 function getAgent(proxy: string | undefined): { httpAgent?: http.Agent; httpsAgent?: https.Agent } {
@@ -393,6 +395,53 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       return `余额: ${json.balance}`;
     }
     return JSON.stringify(json).slice(0, 200);
+  }
+
+  /**
+   * 拉取服务商可用模型列表（V1.1.0 动态模型接入）
+   * 兼容主流响应格式：OpenAI 标准 { data: [{ id }] } 与 Ollama 风格 { models: [{ name }] }；
+   * 附带解析常见元数据字段（context_length / max_output_tokens 等），缺省由上层套用全局默认
+   */
+  async listModels(): Promise<Array<{ id: string; contextWindow?: number; maxOutputTokens?: number }>> {
+    // API Key 未配置时不携带 Authorization（部分服务商允许匿名查看模型列表）
+    const headers = this.apiKey ? this.buildHeaders() : { Accept: 'application/json' };
+    const { status, json, raw } = await fetchJson(`${this.baseUrl}/models`, {
+      headers,
+      timeout: 30000,
+      proxy: this.proxy
+    });
+    if (status === 0) {
+      throw new Error('网络请求失败');
+    }
+    if (status !== 200) {
+      const msg = json?.error?.message ?? json?.message ?? raw?.slice(0, 300) ?? `HTTP ${status}`;
+      throw new Error(`模型列表拉取失败 (${status}): ${msg}`);
+    }
+    const items = Array.isArray(json?.data) ? json.data : Array.isArray(json?.models) ? json.models : null;
+    if (!items) {
+      throw new Error('模型列表拉取失败：接口响应格式不支持（缺少 data / models 字段）');
+    }
+    const out: Array<{ id: string; contextWindow?: number; maxOutputTokens?: number }> = [];
+    for (const it of items) {
+      const id = typeof it?.id === 'string' && it.id ? it.id : typeof it?.name === 'string' && it.name ? it.name : '';
+      if (!id) {
+        continue;
+      }
+      const entry: { id: string; contextWindow?: number; maxOutputTokens?: number } = { id };
+      const cw = it?.context_length ?? it?.contextWindow ?? it?.max_input_tokens;
+      const mo = it?.max_output_tokens ?? it?.maxOutputTokens;
+      if (typeof cw === 'number' && cw > 0) {
+        entry.contextWindow = cw;
+      }
+      if (typeof mo === 'number' && mo > 0) {
+        entry.maxOutputTokens = mo;
+      }
+      out.push(entry);
+    }
+    if (out.length === 0) {
+      throw new Error('模型列表拉取失败：服务商返回的模型列表为空');
+    }
+    return out;
   }
 }
 

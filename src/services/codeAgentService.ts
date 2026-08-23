@@ -8,9 +8,9 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   AttachedFileRef, ChatMessage, DailyUsage, ExtensionToWebviewMessage, ModelMeta,
-  PermissionRequest, RunMode, Session, SessionContextStats, SessionListItem
+  PermissionRequest, ProviderInfo, RunMode, Session, SessionContextStats, SessionListItem
 } from '../types';
-import { ConfigManager } from '../config/configManager';
+import { ConfigManager, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS, PRESET_PROVIDER_ID } from '../config/configManager';
 import { SecurityManager } from '../security/securityManager';
 import { AuditLogger } from '../security/auditLogger';
 import { SessionManager } from '../sessions/sessionManager';
@@ -66,7 +66,7 @@ export class CodeAgentService {
     this.tools = new ToolRegistry();
     this.adapters = new AdapterRegistry();
     this.context = new ContextManager(
-      () => this.createAdapter(),
+      modelId => this.createAdapter(modelId),
       id => this.config.getModel(id),
       () => this.config.getAutoCompressThreshold()
     );
@@ -79,11 +79,14 @@ export class CodeAgentService {
       usage: this.usage,
       context: this.context,
       tools: this.tools,
-      getAdapter: () => this.createAdapter()
+      getAdapter: modelId => this.createAdapter(modelId)
     });
     // 编辑器 diff 装饰：文件写入后自动打开文件并标记增删行
     this.decorator = new EditorDiffDecorator();
     this.disposables.push(this.decorator);
+
+    // V1.1.0 启动时自动增量同步各服务商模型列表（失败时回退本地缓存，不阻塞主流程）
+    void this.syncAllProviders();
 
     // 配置变更：historyPath 变化时重建存储目录并刷新会话列表，其余设置广播刷新
     this.disposables.push(
@@ -148,13 +151,18 @@ export class CodeAgentService {
 
   // ---------- 适配器 ----------
 
-  async createAdapter() {
-    const apiKey = await this.config.getApiKey();
+  /**
+   * 按模型创建适配器（V1.1.0 多服务商体系）：
+   * 依据模型所属服务商路由 Base URL 与 API Key；未命中时回退预置 DeepSeek 服务商
+   */
+  async createAdapter(modelId?: string) {
+    const provider = this.config.getProviderForModel(modelId);
+    const apiKey = await this.config.getProviderApiKey(provider.id);
     if (!apiKey) {
-      throw new Error('未配置 API Key，请在设置中填写模型 API Key');
+      throw new Error(`服务商「${provider.name}」未配置 API Key，请在设置 → 模型配置中为该服务商填写密钥`);
     }
     return this.adapters.create({
-      baseUrl: this.config.getBaseUrl(),
+      baseUrl: provider.baseUrl,
       apiKey,
       proxy: this.config.getProxy() || undefined,
       timeout: this.config.getRequestTimeout()
@@ -863,6 +871,185 @@ export class CodeAgentService {
     void vscode.window.showInformationMessage('Code Agent 设置已保存');
   }
 
+  // ---------- 模型服务商与模型列表同步（V1.1.0 多模型接入体系） ----------
+
+  /** 同步队列：串行化各服务商的拉取请求，避免并发重入 */
+  private syncQueue: Promise<void> = Promise.resolve();
+
+  /**
+   * 同步全部服务商模型列表（启动时自动执行一次增量同步）
+   * 单个服务商失败不影响其他服务商；结果通过广播 settings:state 通知各面板
+   */
+  syncAllProviders(): Promise<void> {
+    const run = async (): Promise<void> => {
+      for (const p of this.config.getProviders()) {
+        await this.syncProviderModels(p.id);
+      }
+      this.broadcastSettings();
+    };
+    this.syncQueue = this.syncQueue.then(run, run);
+    return this.syncQueue;
+  }
+
+  /**
+   * 拉取指定服务商的模型列表并同步到本地缓存。
+   * 成功：整体替换该服务商模型（用户校准过的元数据保留），记录同步时间；
+   * 失败：保留本地缓存（离线兑底），记录错误原因供设置页展示。
+   * 未配置 API Key 且接口要求鉴权（401/403）时静默跳过，不标记为错误。
+   */
+  async syncProviderModels(providerId: string): Promise<{ ok: boolean; error?: string }> {
+    const provider = this.config.getProvider(providerId);
+    if (!provider) {
+      return { ok: false, error: '服务商不存在' };
+    }
+    const apiKey = await this.config.getProviderApiKey(providerId);
+    let fetched: ModelMeta[];
+    try {
+      const adapter = this.adapters.create({
+        baseUrl: provider.baseUrl,
+        apiKey,
+        proxy: this.config.getProxy() || undefined,
+        timeout: this.config.getRequestTimeout()
+      });
+      if (!adapter.listModels) {
+        throw new Error('当前适配器不支持模型列表接口');
+      }
+      const items = await adapter.listModels();
+      // 元数据兑底：接口未返回元数据时套用全局默认（300k 上下文 / 100k 输出）
+      fetched = items.map(it => ({
+        id: it.id,
+        name: humanizeModelName(it.id),
+        contextWindow: it.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+        maxOutputTokens: it.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+        pricing: '按量计费',
+        providerId
+      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // 无密钥且鉴权失败：待配置密钥的常态，不算同步错误
+      if (!apiKey && /401|403/.test(msg)) {
+        this.config.setProviderSyncState(providerId, {});
+        return { ok: false };
+      }
+      this.config.setProviderSyncState(providerId, { syncError: msg });
+      return { ok: false, error: msg };
+    }
+    await this.config.replaceProviderModels(providerId, fetched);
+    this.config.setProviderSyncState(providerId, { lastSyncAt: Date.now() });
+    // 默认模型跟随：当前 defaultModel 不在新列表中时回退为列表首个模型
+    const list = this.config.getModels();
+    if (!list.some(m => m.id === this.config.getRawDefaultModel())) {
+      await this.config.updateSettings({ defaultModel: list[0]?.id ?? '' });
+    }
+    return { ok: true };
+  }
+
+  // ---------- 服务商管理 ----------
+
+  /** 校验服务商配置：名称必填、Base URL 必填且为 http(s) 协议 */
+  private validateProviderInput(name: string, baseUrl: string): string | undefined {
+    if (!name.trim()) {
+      return '服务商名称不能为空';
+    }
+    if (!/^https?:\/\/.+/i.test(baseUrl.trim())) {
+      return '接口 Base URL 必须以 http:// 或 https:// 开头';
+    }
+    return undefined;
+  }
+
+  async handleProviderAdd(controller: WebviewController, name: string, baseUrl: string, apiKey?: string): Promise<void> {
+    const invalid = this.validateProviderInput(name, baseUrl);
+    if (invalid) {
+      controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: invalid });
+      return;
+    }
+    const id = randomId();
+    await this.config.addProvider({ id, name: name.trim(), baseUrl: baseUrl.trim().replace(/\/+$/, '') });
+    if (apiKey !== undefined && apiKey.trim()) {
+      await this.config.setProviderApiKey(id, apiKey);
+    }
+    await this.sendSettings(controller);
+    // 新增完成后立即拉取该服务商模型列表（失败不阻断：服务商已保存，可后续补密钥重试）
+    const res = await this.syncProviderModels(id);
+    await this.sendSettings(controller);
+    this.broadcastSettings();
+    if (!res.ok && res.error) {
+      controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: `服务商已添加，但模型列表拉取失败：${res.error}` });
+    }
+  }
+
+  async handleProviderUpdate(
+    controller: WebviewController,
+    id: string,
+    name: string,
+    baseUrl: string,
+    apiKey?: string,
+    clearApiKey?: boolean
+  ): Promise<void> {
+    const provider = this.config.getProvider(id);
+    if (!provider) {
+      controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: '服务商不存在' });
+      return;
+    }
+    const invalid = this.validateProviderInput(name, baseUrl);
+    if (invalid) {
+      controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: invalid });
+      return;
+    }
+    const baseUrlChanged = provider.baseUrl !== baseUrl.trim().replace(/\/+$/, '');
+    await this.config.updateProvider(id, { name: name.trim(), baseUrl: baseUrl.trim().replace(/\/+$/, '') });
+    if (apiKey !== undefined && apiKey.trim()) {
+      await this.config.setProviderApiKey(id, apiKey);
+    }
+    if (clearApiKey) {
+      await this.config.deleteProviderApiKey(id);
+    }
+    await this.sendSettings(controller);
+    // 修改 Base URL 后自动重新拉取模型列表
+    if (baseUrlChanged) {
+      await this.syncProviderModels(id);
+      await this.sendSettings(controller);
+    }
+    this.broadcastSettings();
+  }
+
+  async handleProviderDelete(controller: WebviewController, id: string): Promise<void> {
+    if (id === PRESET_PROVIDER_ID) {
+      controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: '预置服务商 DeepSeek 不可删除（可修改名称与 Base URL）' });
+      return;
+    }
+    const provider = this.config.getProvider(id);
+    if (!provider) {
+      return;
+    }
+    await this.config.deleteProvider(id);
+    await this.config.removeProviderModels(id);
+    await this.config.deleteProviderApiKey(id);
+    // 默认模型跟随：被删服务商的模型为默认模型时回退为剩余列表首个模型
+    const list = this.config.getModels();
+    if (!list.some(m => m.id === this.config.getRawDefaultModel())) {
+      await this.config.updateSettings({ defaultModel: list[0]?.id ?? '' });
+    }
+    await this.sendSettings(controller);
+    this.broadcastSettings();
+  }
+
+  /** 手动刷新服务商模型列表 */
+  async handleProviderRefresh(controller: WebviewController, id: string): Promise<void> {
+    if (!this.config.getProvider(id)) {
+      controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: '服务商不存在' });
+      return;
+    }
+    const res = await this.syncProviderModels(id);
+    await this.sendSettings(controller);
+    this.broadcastSettings();
+    if (!res.ok && res.error) {
+      controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: `模型列表拉取失败：${res.error}` });
+    } else if (res.ok) {
+      void vscode.window.showInformationMessage(`「${this.config.getProvider(id)?.name}」模型列表已同步`);
+    }
+  }
+
   async handleModelAdd(controller: WebviewController, model: ModelMeta): Promise<void> {
     const models = this.config.getModels();
     if (models.some(m => m.id === model.id)) {
@@ -918,7 +1105,8 @@ export class CodeAgentService {
     let balance: string | undefined;
     let balanceError: string | undefined;
     try {
-      const adapter = await this.createAdapter();
+      // 余额接口为 DeepSeek 专属能力：使用默认模型所属服务商（预置 DeepSeek）查询
+      const adapter = await this.createAdapter(this.config.getDefaultModel());
       balance = await adapter.queryBalance();
       // 已用金额：本地按 Token 用量 × 模型单价累计（自然日口径），无法从余额接口直接推导
       const used = today?.usedAmount ?? 0;
@@ -929,4 +1117,16 @@ export class CodeAgentService {
     }
     controller.post({ type: 'usage:result', usage: { today, balance, balanceError } });
   }
+}
+
+/**
+ * 模型 id 人性化展示名：分割符切分并首字母大写（如 deepseek-chat → Deepseek Chat）
+ * 无分割符或纯符号 id 时原样返回
+ */
+function humanizeModelName(id: string): string {
+  const tokens = id.split(/[-_./]+/).filter(Boolean);
+  if (tokens.length <= 1) {
+    return id;
+  }
+  return tokens.map(t => (t[0] ? t[0].toUpperCase() + t.slice(1) : t)).join(' ');
 }

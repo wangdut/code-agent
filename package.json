@@ -2,7 +2,7 @@
   "name": "code-agent",
   "displayName": "Code Agent",
   "description": "基于大语言模型的智能编程 Agent：代码生成、文件编辑、终端执行、多轮任务自主闭环",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "wangh",
   "author": {
     "name": "wangh"
@@ -100,31 +100,28 @@
         "codeAgent.baseUrl": {
           "type": "string",
           "default": "https://api.deepseek.com",
-          "description": "模型接口 Base URL（OpenAI 兼容协议）"
+          "description": "（已废弃，V1.1.0 起按服务商独立配置）旧版全局模型接口 Base URL"
         },
-        "codeAgent.models": {
+        "codeAgent.providers": {
           "type": "array",
           "default": [
             {
-              "id": "deepseek-v4-flash",
-              "name": "DeepSeek V4 Flash",
-              "contextWindow": 131072,
-              "maxOutputTokens": 8192,
-              "pricing": "按量计费"
-            },
-            {
-              "id": "deepseek-v4-pro",
-              "name": "DeepSeek V4 Pro",
-              "contextWindow": 262144,
-              "maxOutputTokens": 32768,
-              "pricing": "按量计费"
+              "id": "deepseek",
+              "name": "DeepSeek",
+              "baseUrl": "https://api.deepseek.com",
+              "preset": true
             }
           ],
-          "description": "已配置的模型列表（OpenAI 兼容协议，可自定义新增）"
+          "description": "模型服务商列表（V1.1.0 多模型接入体系）：每个服务商独立配置 Base URL 与 API Key，模型列表基于 /models 接口动态拉取并本地缓存"
+        },
+        "codeAgent.models": {
+          "type": "array",
+          "default": [],
+          "description": "模型列表本地缓存（由服务商 /models 接口动态拉取填充，离线时使用缓存；取消硬编码）"
         },
         "codeAgent.defaultModel": {
           "type": "string",
-          "default": "deepseek-v4-flash",
+          "default": "deepseek-chat",
           "description": "默认使用的模型"
         },
         "codeAgent.defaultMode": {
@@ -162,8 +159,8 @@
         },
         "codeAgent.maxTokens": {
           "type": "number",
-          "default": 8192,
-          "description": "全局默认单次最大输出 Token 数"
+          "default": 100000,
+          "description": "全局默认单次最大输出 Token 数（V1.1.0 默认 100k，上限受选中模型的最大输出 Token 约束）"
         },
         "codeAgent.frequencyPenalty": {
           "type": "number",
@@ -193,10 +190,10 @@
         },
         "codeAgent.maxToolIterations": {
           "type": "number",
-          "default": 20,
+          "default": 128,
           "minimum": 1,
           "maximum": 1000,
-          "description": "单轮任务中 Agent 可自主调度工具的最大次数（触发上限时任务中断并提示）"
+          "description": "单轮任务中 Agent 可自主调度工具的最大次数（V1.1.0 默认 128，适配复杂长链路任务；触发上限时任务中断并提示）"
         },
         "codeAgent.autoCompressThreshold": {
           "type": "number",

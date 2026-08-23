@@ -3,7 +3,7 @@
  * 按模块分级：模型配置 / 推理参数 / Agent行为 / 存储配置 / 安全权限 / 高级设置 / 用量统计
  */
 import React, { useEffect, useState } from 'react';
-import { ModelMeta, SettingsSnapshot } from '../../src/types';
+import { ModelMeta, ProviderInfo, SettingsSnapshot } from '../../src/types';
 import { post } from '../vscode';
 
 interface Props {
@@ -14,13 +14,16 @@ interface Props {
 
 export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactElement {
   const [form, setForm] = useState<SettingsSnapshot>(settings);
-  const [apiKey, setApiKey] = useState('');
-  const [showApiKey, setShowApiKey] = useState(false);
   const [editingModel, setEditingModel] = useState<ModelMeta | null>(null);
+  const [editingProvider, setEditingProvider] = useState<ProviderInfo | null>(null);
+  /** 模型参数配置区当前选中的服务商（服务商管理区下方） */
+  const [selectedProviderId, setSelectedProviderId] = useState(settings.providers[0]?.id ?? '');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setForm(settings);
+    // 服务商列表变化后：选中项被删除时回退到首个服务商
+    setSelectedProviderId(prev => (settings.providers.some(p => p.id === prev) ? prev : settings.providers[0]?.id ?? ''));
   }, [settings]);
 
   const set = <K extends keyof SettingsSnapshot>(key: K, value: SettingsSnapshot[K]) => {
@@ -38,7 +41,6 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
     post({
       type: 'settings:update',
       settings: {
-        baseUrl: form.baseUrl,
         defaultModel: form.defaultModel,
         defaultMode: form.defaultMode,
         requestTimeout: Number(form.requestTimeout),
@@ -50,28 +52,31 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
         permissionMode: form.permissionMode,
         terminalAutoApprove: form.terminalAutoApprove,
         highRiskCommands: form.highRiskCommands,
-        // 保存兜底：非数字/超范围回退为合法值（1-1000，默认 20）
-        maxToolIterations: Math.min(1000, Math.max(1, Math.round(Number(form.maxToolIterations) || 20))),
+        // 保存兜底：非数字/超范围回退为合法值（1-1000，默认 128）
+        maxToolIterations: Math.min(1000, Math.max(1, Math.round(Number(form.maxToolIterations) || 128))),
         autoCompressThreshold: Number(form.autoCompressThreshold),
         historyPath: form.historyPath,
         folderIncludePatterns: form.folderIncludePatterns,
         logLevel: form.logLevel,
         debugMode: form.debugMode,
         autoUpdateCheck: form.autoUpdateCheck
-      },
-      apiKey: apiKey || undefined
+      }
     });
-    setApiKey('');
     setTimeout(() => setSaving(false), 400);
   };
 
-  const saveModel = (model: ModelMeta, oldId?: string) => {
-    if (oldId) {
-      post({ type: 'model:update', oldId, model });
-    } else {
-      post({ type: 'model:add', model });
-    }
+  const saveModel = (model: ModelMeta) => {
+    post({ type: 'model:update', oldId: model.id, model });
     setEditingModel(null);
+  };
+
+  const saveProvider = (p: { name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean }) => {
+    if (editingProvider) {
+      post({ type: 'provider:update', id: editingProvider.id, ...p });
+    } else {
+      post({ type: 'provider:add', ...p });
+    }
+    setEditingProvider(null);
   };
 
   return (
@@ -88,43 +93,73 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
         </div>
       </div>
       <div className="settings-body">
-        {/* 1. 模型配置 */}
+        {/* 1. 模型配置（V1.1.0：服务商管理区 + 模型参数配置区两级结构） */}
         <Section title="模型配置" icon="🧠">
-          <Field label="API Key" hint="加密存储于系统密钥库（SecretStorage）">
-            <div className="api-key-row">
-              <input
-                type={showApiKey ? 'text' : 'password'}
-                className="text-input api-key-input"
-                placeholder={settings.apiKeyConfigured ? '已配置（输入新值覆盖）' : '未配置，请输入 API Key'}
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                autoComplete="off"
-                spellCheck={false}
-              />
+          <Field
+            label="模型服务商"
+            tooltip="支持所有遵循 OpenAI 兼容协议的大模型服务商接入（DeepSeek、月之暗面 Kimi、智谱 AI、通义千问等）。\n\n每个服务商拥有独立的 Base URL 与 API Key；新增/修改服务商或点击刷新按钮后，将基于 Base URL 自动拉取该服务商的全部可用模型列表并本地缓存，离线时使用缓存数据。"
+            hint="服务商管理区：支持新增、编辑、删除、刷新模型列表"
+          >
+            <div className="provider-list">
+              {form.providers.map(p => {
+                const count = form.models.filter(m => (m.providerId ?? 'deepseek') === p.id).length;
+                return (
+                  <div key={p.id} className="provider-item">
+                    <div className="provider-item-info">
+                      <span className="provider-name">
+                        {p.name}
+                        {p.preset && <span className="provider-preset-badge">预置</span>}
+                      </span>
+                      <span className="provider-meta">
+                        {p.baseUrl} · 模型 {count} 个
+                        {p.hasApiKey ? ' · ✓ 密钥已配置' : ' · ⚠ 密钥未配置'}
+                        {p.lastSyncAt && !p.syncError ? ` · ✓ 已同步 ${new Date(p.lastSyncAt).toLocaleTimeString()}` : ''}
+                      </span>
+                      {p.syncError && (
+                        <span className="provider-sync-error" title={p.syncError}>
+                          ⚠ 同步失败：{p.syncError}
+                        </span>
+                      )}
+                    </div>
+                    <div className="provider-item-actions">
+                      <button className="mini-btn" title="重新拉取该服务商的模型列表" onClick={() => post({ type: 'provider:refresh', id: p.id })}>
+                        ↻ 刷新
+                      </button>
+                      <button className="mini-btn" onClick={() => setEditingProvider({ ...p })}>编辑</button>
+                      <button
+                        className="mini-btn danger"
+                        title={p.preset ? '预置服务商不可删除（可编辑名称与 Base URL）' : '删除该服务商及其模型'}
+                        disabled={!!p.preset}
+                        onClick={() => post({ type: 'provider:delete', id: p.id })}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
               <button
-                className={`api-key-toggle${showApiKey ? ' api-key-toggle-on' : ''}`}
-                title={showApiKey ? '隐藏 API Key' : '显示 API Key'}
-                onClick={() => setShowApiKey(v => !v)}
-                disabled={!apiKey}
+                className="btn add-model-btn"
+                onClick={() => setEditingProvider({ id: '', name: '', baseUrl: '', hasApiKey: false })}
               >
-                {showApiKey ? '🙈' : '👁'}
+                ＋ 新增模型服务商
               </button>
             </div>
-            {/* 实时视觉反馈：配置状态与待保存状态 */}
-            <div className="api-key-status">
-              <span className={`api-key-chip${settings.apiKeyConfigured ? ' api-key-chip-ok' : ' api-key-chip-none'}`}>
-                {settings.apiKeyConfigured ? '✓ 已配置' : '未配置'}
-              </span>
-              {apiKey && <span className="api-key-chip api-key-chip-pending">输入新值，点击“保存设置”生效</span>}
-            </div>
           </Field>
-          <Field label="接口 Base URL" hint="OpenAI 兼容协议服务地址">
-            <input className="text-input" value={form.baseUrl} onChange={e => set('baseUrl', e.target.value)} />
+          <Field
+            label="模型参数配置区服务商"
+            tooltip="模型参数配置区展示选中服务商下的所有模型，可针对单个模型校准上下文窗口与最大输出 Token 等元数据"
+            hint="下方模型列表仅展示所选服务商的模型"
+          >
+            <select className="text-input" value={selectedProviderId} onChange={e => setSelectedProviderId(e.target.value)}>
+              {form.providers.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
           </Field>
-          <div className="field">
-            <label className="field-label">模型列表</label>
+          <Field label="模型列表" hint="元数据接口未返回时套用全局默认（300k 上下文 / 100k 输出），可逐模型校准">
             <div className="model-list">
-              {form.models.map(m => (
+              {form.models.filter(m => (m.providerId ?? 'deepseek') === selectedProviderId).map(m => (
                 <div key={m.id} className="model-item">
                   <div className="model-item-info">
                     <span className="model-name">{m.name}</span>
@@ -133,28 +168,43 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
                     </span>
                   </div>
                   <div className="model-item-actions">
-                    <button className="mini-btn" onClick={() => setEditingModel({ ...m })}>编辑</button>
-                    <button className="mini-btn danger" onClick={() => post({ type: 'model:delete', modelId: m.id })}>删除</button>
+                    <button className="mini-btn" onClick={() => setEditingModel({ ...m })}>编辑元数据</button>
                   </div>
                 </div>
               ))}
-              <button className="btn add-model-btn" onClick={() => setEditingModel({ id: '', name: '', contextWindow: 131072, maxOutputTokens: 8192, pricing: '按量计费' })}>
-                ＋ 新增模型
-              </button>
+              {form.models.filter(m => (m.providerId ?? 'deepseek') === selectedProviderId).length === 0 && (
+                <div className="empty-hint">
+                  暂无模型缓存。请配置 API Key 后点击服务商右侧「↻ 刷新」拉取模型列表；离线时将使用上次同步的本地缓存。
+                </div>
+              )}
             </div>
-          </div>
-          <Field label="默认模型">
+          </Field>
+          <Field
+            label="默认模型"
+            tooltip="新会话默认使用的模型；模型按所属服务商分组展示，切换后即时生效"
+          >
             <select className="text-input" value={form.defaultModel} onChange={e => set('defaultModel', e.target.value)}>
-              {form.models.map(m => (
-                <option key={m.id} value={m.id}>{m.name} ({m.id})</option>
-              ))}
+              {form.models.length === 0 && <option value="">暂无可用模型（请先刷新模型列表）</option>}
+              {form.providers.map(p => {
+                const models = form.models.filter(m => (m.providerId ?? 'deepseek') === p.id);
+                if (models.length === 0) {
+                  return null;
+                }
+                return (
+                  <optgroup key={p.id} label={p.name}>
+                    {models.map(m => (
+                      <option key={m.id} value={m.id}>{m.name} ({m.id})</option>
+                    ))}
+                  </optgroup>
+                );
+              })}
             </select>
           </Field>
           <div className="field-row">
-            <Field label="请求超时 (ms)">
+            <Field label="请求超时 (ms)" tooltip="模型接口请求超时时间；网络不稳定时建议调大">
               <input className="text-input" type="number" value={form.requestTimeout} onChange={e => set('requestTimeout', Number(e.target.value))} />
             </Field>
-            <Field label="网络代理" hint="如 http://127.0.0.1:7890">
+            <Field label="网络代理" hint="如 http://127.0.0.1:7890" tooltip="全局网络代理地址，所有服务商请求共用；留空不使用代理">
               <input className="text-input" value={form.proxy} onChange={e => set('proxy', e.target.value)} />
             </Field>
           </div>
@@ -234,7 +284,7 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
         <Section title="Agent 行为" icon="🤖">
           <Field
             label="最大工具调用轮次"
-            tooltip="单轮任务中 Agent 可自主调度工具的最大次数。正整数，范围 1-1000，默认 20；输入非数字、负数或超范围值将自动回退为合法值。保存后即时生效，作用于所有新建与续接的会话。"
+            tooltip="单轮任务中 Agent 可自主调度工具的最大次数。正整数，范围 1-1000，默认 128（适配复杂长链路任务）；输入非数字、负数或超范围值将自动回退为合法值。保存后即时生效，作用于所有新建与续接的会话。"
             hint="触发上限时任务中断并在回复中提示，可在设置中调大以支持更长任务链路"
           >
             <input
@@ -322,9 +372,14 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
         </Section>
       </div>
 
-      {/* 模型编辑弹层 */}
+      {/* 模型元数据编辑弹层 */}
       {editingModel && (
-        <ModelEditor model={editingModel} onSave={m => saveModel(m, editingModel.id || undefined)} onCancel={() => setEditingModel(null)} />
+        <ModelEditor model={editingModel} onSave={saveModel} onCancel={() => setEditingModel(null)} />
+      )}
+
+      {/* 服务商新增/编辑弹层 */}
+      {editingProvider && (
+        <ProviderEditor provider={editingProvider} onSave={saveProvider} onCancel={() => setEditingProvider(null)} />
       )}
     </div>
   );
@@ -381,17 +436,21 @@ function UsageStat({ label, value }: { label: string; value: number }): React.Re
   );
 }
 
+/**
+ * 模型元数据校准编辑弹层（V1.1.0）：模型列表由服务商动态拉取，仅支持校准元数据；
+ * 校准值在下次拉取同步时保留（按模型 id 合并），新增模型自动套用全局默认元数据
+ */
 function ModelEditor({ model, onSave, onCancel }: { model: ModelMeta; onSave: (m: ModelMeta) => void; onCancel: () => void }): React.ReactElement {
   const [m, setM] = useState<ModelMeta>(model);
-  const valid = m.id.trim() && m.name.trim() && m.contextWindow > 0 && m.maxOutputTokens > 0 && m.maxOutputTokens <= m.contextWindow;
+  const valid = m.name.trim() && m.contextWindow > 0 && m.maxOutputTokens > 0 && m.maxOutputTokens <= m.contextWindow;
   return (
     <div className="permission-backdrop">
       <div className="model-editor">
         <div className="permission-header">
-          <span className="permission-title">{model.id ? '编辑模型' : '新增模型'}</span>
+          <span className="permission-title">模型元数据校准</span>
         </div>
-        <Field label="模型标识 (id)" hint="API 调用使用的模型名，如 deepseek-v4-pro">
-          <input className="text-input" value={m.id} onChange={e => setM({ ...m, id: e.target.value })} />
+        <Field label="模型标识 (id)" hint="API 调用使用的模型名，由服务商模型列表提供">
+          <input className="text-input" value={m.id} readOnly />
         </Field>
         <Field label="展示名称">
           <input className="text-input" value={m.name} onChange={e => setM({ ...m, name: e.target.value })} />
@@ -399,13 +458,13 @@ function ModelEditor({ model, onSave, onCancel }: { model: ModelMeta; onSave: (m
         <div className="field-row">
           <Field
             label="上下文窗口 (Token)"
-            tooltip="模型官方能力参数（总上下文窗口上限），用于 Token 用量统计、自动压缩阈值计算与请求参数合法性校验，不直接控制单次生成长度"
+            tooltip="模型官方能力参数（总上下文窗口上限），用于 Token 用量统计、自动压缩阈值计算与请求参数合法性校验；默认 300000（300k），可针对该模型单独校准"
           >
             <input className="text-input" type="number" value={m.contextWindow} onChange={e => setM({ ...m, contextWindow: Number(e.target.value) })} />
           </Field>
           <Field
             label="最大输出 (Token)"
-            tooltip="模型官方能力参数（单次输出能力上限），用于请求参数合法性校验；全局 max_tokens 超过该值时自动截断"
+            tooltip="模型官方能力参数（单次输出能力上限），用于请求参数合法性校验；全局 max_tokens 超过该值时自动截断；默认 100000（100k），可针对该模型单独校准"
           >
             <input className="text-input" type="number" value={m.maxOutputTokens} onChange={e => setM({ ...m, maxOutputTokens: Number(e.target.value) })} />
           </Field>
@@ -413,12 +472,94 @@ function ModelEditor({ model, onSave, onCancel }: { model: ModelMeta; onSave: (m
         {m.maxOutputTokens > m.contextWindow && (
           <div className="param-warning">⚠ 单次输出上限不能超过上下文窗口大小，请修正后再保存</div>
         )}
-        <Field label="计费类型">
-          <input className="text-input" value={m.pricing} onChange={e => setM({ ...m, pricing: e.target.value })} />
-        </Field>
         <div className="permission-actions">
           <button className="btn" onClick={onCancel}>取消</button>
           <button className="btn btn-primary" disabled={!valid} onClick={() => onSave(m)}>保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 服务商新增/编辑弹层（V1.1.0 多模型接入）
+ * 必填：服务商名称、接口 Base URL；API Key 选填（掩码显示与显隐切换，支持先新增后补密钥）
+ */
+function ProviderEditor({
+  provider,
+  onSave,
+  onCancel
+}: {
+  provider: ProviderInfo;
+  onSave: (p: { name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean }) => void;
+  onCancel: () => void;
+}): React.ReactElement {
+  const isEdit = !!provider.id;
+  const [name, setName] = useState(provider.name);
+  const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
+  const [apiKey, setApiKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [clearKey, setClearKey] = useState(false);
+  const nameValid = name.trim().length > 0;
+  const urlValid = /^https?:\/\/.+/i.test(baseUrl.trim());
+  return (
+    <div className="permission-backdrop">
+      <div className="model-editor">
+        <div className="permission-header">
+          <span className="permission-title">{isEdit ? `编辑服务商 · ${provider.name}` : '新增模型服务商'}</span>
+        </div>
+        <Field
+          label="服务商名称"
+          tooltip="服务商展示名称，用于设置页分组与底部模型切换下拉框的分组标签，如：月之暗面 Kimi、智谱 AI"
+          hint="必填，任意便于识别的名称"
+        >
+          <input className="text-input" placeholder="如：月之暗面 Kimi" value={name} onChange={e => setName(e.target.value)} />
+        </Field>
+        <Field
+          label="接口 Base URL"
+          tooltip="OpenAI 兼容协议的接口地址，模型列表与对话请求均基于该地址调用（/models、/chat/completions）"
+          hint="必填，如 https://api.moonshot.cn/v1"
+        >
+          <input className={`text-input${urlValid ? '' : ' input-invalid'}`} placeholder="如：https://api.moonshot.cn/v1" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
+        </Field>
+        <Field
+          label="API Key"
+          tooltip="服务商密钥，按服务商独立加密存储于系统密钥库（SecretStorage）。选填：可先新增服务商并查看模型列表，后续补充密钥后再调用；编辑时留空表示保持现有密钥不变"
+          hint={isEdit && provider.hasApiKey ? '已配置密钥：留空保持现状，输入新值覆盖，或勾选清除密钥' : '选填：后续可随时补充'}
+        >
+          <div className="api-key-row">
+            <input
+              type={showKey ? 'text' : 'password'}
+              className="text-input api-key-input"
+              placeholder={isEdit && provider.hasApiKey ? '留空保持现有密钥' : '选填，可稍后补充'}
+              value={apiKey}
+              onChange={e => setApiKey(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button
+              className={`api-key-toggle${showKey ? ' api-key-toggle-on' : ''}`}
+              title={showKey ? '隐藏 API Key' : '显示 API Key'}
+              onClick={() => setShowKey(v => !v)}
+              disabled={!apiKey}
+            >
+              {showKey ? '🙈' : '👁'}
+            </button>
+          </div>
+        </Field>
+        {isEdit && provider.hasApiKey && (
+          <Checkbox label="清除已配置的密钥" checked={clearKey} onChange={setClearKey} />
+        )}
+        {!urlValid && baseUrl.trim() && <div className="param-warning">⚠ Base URL 必须以 http:// 或 https:// 开头</div>}
+        <div className="permission-actions">
+          <button className="btn" onClick={onCancel}>取消</button>
+          <button
+            className="btn btn-primary"
+            disabled={!nameValid || !urlValid}
+            onClick={() => onSave({ name: name.trim(), baseUrl: baseUrl.trim(), apiKey: apiKey || undefined, clearApiKey: clearKey || undefined })}
+          >
+            {isEdit ? '保存' : '新增并拉取模型'}
+          </button>
         </div>
       </div>
     </div>

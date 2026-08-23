@@ -10,6 +10,7 @@
 import { ChatMessage, CompressRecord, ModelMeta, RunMode, Session, SessionContextStats } from '../types';
 import { estimateTokens } from './tokenCounter';
 import { ModelAdapter, ModelMessage } from '../models/modelAdapter';
+import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS } from '../config/configManager';
 import { randomId } from '../utils/id';
 
 /** 压缩时的最小保留消息数（避免压缩后上下文过空） */
@@ -44,7 +45,8 @@ export class ContextManager {
   private systemPrompt = '';
 
   constructor(
-    private readonly getAdapter: () => Promise<ModelAdapter>,
+    /** 按模型创建适配器（V1.1.0：多服务商体系下按模型定位所属服务商路由） */
+    private readonly getAdapter: (modelId: string) => Promise<ModelAdapter>,
     private readonly getModel: (id: string) => ModelMeta | undefined,
     private readonly getThreshold: () => number
   ) {}
@@ -64,7 +66,7 @@ export class ContextManager {
    */
   computeStats(session: Session, modelId: string): SessionContextStats {
     const model = this.getModel(modelId);
-    const windowTokens = model?.contextWindow ?? 131072;
+    const windowTokens = model?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
     const system = this.getSystemPromptTokens();
     const summaries = session.summaries.reduce((acc, s) => acc + estimateTokens(s.content), 0);
     const active = session.messages.reduce((acc, m) => acc + this.messageTokens(m), 0);
@@ -86,7 +88,7 @@ export class ContextManager {
       sessionId: session.id,
       usedTokens,
       windowTokens,
-      maxOutputTokens: model?.maxOutputTokens ?? 8192,
+      maxOutputTokens: model?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
       calibrated,
       layers: { system, active, summaries }
     };
@@ -137,7 +139,7 @@ export class ContextManager {
 
     let content = '';
     try {
-      const adapter = await this.getAdapter();
+      const adapter = await this.getAdapter(modelId);
       const messages: ModelMessage[] = [
         { role: 'system', content: SUMMARIZE_SYSTEM },
         { role: 'user', content: original.slice(0, 60000) }

@@ -126,6 +126,18 @@ export class WebviewController {
         case 'model:delete':
           await this.service.handleModelDelete(this, msg.modelId);
           break;
+        case 'provider:add':
+          await this.service.handleProviderAdd(this, msg.name, msg.baseUrl, msg.apiKey);
+          break;
+        case 'provider:update':
+          await this.service.handleProviderUpdate(this, msg.id, msg.name, msg.baseUrl, msg.apiKey, msg.clearApiKey);
+          break;
+        case 'provider:delete':
+          await this.service.handleProviderDelete(this, msg.id);
+          break;
+        case 'provider:refresh':
+          await this.service.handleProviderRefresh(this, msg.id);
+          break;
         case 'files:list':
           await this.service.handleFilesList(this, msg.query);
           break;

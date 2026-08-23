@@ -15,6 +15,27 @@ export interface ModelMeta {
   maxOutputTokens: number;
   /** 计费类型说明 */
   pricing: string;
+  /** 所属服务商 id（V1.1.0 多模型体系；旧缓存模型缺省时归属预置服务商） */
+  providerId?: string;
+}
+
+/**
+ * 模型服务商配置（V1.1.0 多模型接入体系）
+ * 服务商为模型调用路由的单元：Base URL 决定接口地址，API Key 按服务商独立加密存储
+ */
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  /** OpenAI 兼容协议接口 Base URL */
+  baseUrl: string;
+  /** 是否已配置 API Key */
+  hasApiKey: boolean;
+  /** 预置服务商（DeepSeek）：保证开箱即用，不可删除、可编辑 */
+  preset?: boolean;
+  /** 最近一次模型列表同步时间（毫秒时间戳） */
+  lastSyncAt?: number;
+  /** 最近一次同步失败原因（成功/未同步时为空） */
+  syncError?: string;
 }
 
 /** 运行模式 */
@@ -196,8 +217,10 @@ export interface DailyUsage {
 
 /** 全局设置快照（发送给 WebView） */
 export interface SettingsSnapshot {
+  /** 是否已配置至少一个服务商的 API Key（V1.1.0 起按服务商维度判定） */
   apiKeyConfigured: boolean;
-  baseUrl: string;
+  /** 已添加的模型服务商（V1.1.0 服务商-模型两级体系） */
+  providers: ProviderInfo[];
   models: ModelMeta[];
   defaultModel: string;
   defaultMode: RunMode;
@@ -261,6 +284,10 @@ export type WebviewToExtensionMessage =
   | { type: 'model:add'; model: ModelMeta }
   | { type: 'model:update'; oldId: string; model: ModelMeta }
   | { type: 'model:delete'; modelId: string }
+  | { type: 'provider:add'; name: string; baseUrl: string; apiKey?: string }
+  | { type: 'provider:update'; id: string; name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean }
+  | { type: 'provider:delete'; id: string }
+  | { type: 'provider:refresh'; id: string }
   | { type: 'files:list'; query: string }
   | { type: 'editor:open'; filePath: string }
   | { type: 'usage:query' }

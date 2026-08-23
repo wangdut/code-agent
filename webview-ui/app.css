@@ -1502,6 +1502,81 @@ button {
   border-color: var(--vscode-errorForeground);
 }
 
+.mini-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---------- 模型服务商管理区（V1.1.0 多模型接入） ---------- */
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.provider-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 5px;
+}
+
+.provider-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.provider-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.provider-preset-badge {
+  font-size: 10px;
+  font-weight: 500;
+  color: #2e8b57;
+  background: rgba(46, 139, 87, 0.15);
+  padding: 0 6px;
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
+.provider-meta {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  word-break: break-all;
+}
+
+.provider-sync-error {
+  font-size: 11px;
+  color: var(--vscode-errorForeground, #f14c4c);
+  word-break: break-all;
+}
+
+.provider-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.empty-hint {
+  font-size: 11.5px;
+  color: var(--vscode-descriptionForeground);
+  padding: 8px 10px;
+  border: 1px dashed var(--vscode-widget-border);
+  border-radius: 5px;
+  line-height: 1.6;
+}
+
 .add-model-btn {
   align-self: flex-start;
 }

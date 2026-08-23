@@ -79,7 +79,8 @@ export interface AgentDeps {
   usage: UsageTracker;
   context: ContextManager;
   tools: ToolRegistry;
-  getAdapter: () => Promise<ModelAdapter>;
+  /** 按模型创建适配器（V1.1.0：多服务商体系下按模型定位所属服务商路由） */
+  getAdapter: (modelId: string) => Promise<ModelAdapter>;
 }
 
 export class AgentEngine {
@@ -230,7 +231,7 @@ export class AgentEngine {
       const messages: ModelMessage[] = this.deps.context.buildMessages(session, contentWithAttachments, mode);
 
       // 初始化移入 try：异常时 finally 仍会清理 runs，避免会话被永久判定为运行中
-      const adapter = await this.deps.getAdapter();
+      const adapter = await this.deps.getAdapter(modelId);
       const params = this.deps.config.getInferenceParams();
       const model = this.deps.config.getModel(modelId);
       const tools = this.buildTools(mode);

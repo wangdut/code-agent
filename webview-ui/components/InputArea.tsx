@@ -5,11 +5,13 @@
  * - 底部常驻操作栏：模型切换下拉框 + 模式切换下拉框 + 发送/停止按钮
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AttachedFileRef, ModelMeta, RunMode } from '../../src/types';
+import { AttachedFileRef, ModelMeta, ProviderInfo, RunMode } from '../../src/types';
 import { post } from '../vscode';
 
 interface Props {
   models: ModelMeta[];
+  /** 服务商列表（模型切换下拉框按服务商分组展示） */
+  providers: ProviderInfo[];
   modelId: string;
   mode: RunMode;
   permissionMode: 'ask' | 'auto';
@@ -95,6 +97,31 @@ export function InputArea(props: Props): React.ReactElement {
     const q = pickerQuery.toLowerCase();
     return pickerItems.filter(p => p.toLowerCase().includes(q));
   }, [pickerItems, pickerQuery]);
+
+  /** 模型按服务商分组（V1.1.0 多模型体系：底部切换下拉框按服务商分组展示全部模型） */
+  const providerGroups = useMemo(() => {
+    const groups: { label: string; models: ModelMeta[] }[] = [];
+    const byProvider = new Map<string, ModelMeta[]>();
+    for (const m of props.models) {
+      const pid = m.providerId ?? 'deepseek';
+      if (!byProvider.has(pid)) {
+        byProvider.set(pid, []);
+      }
+      byProvider.get(pid)!.push(m);
+    }
+    for (const p of props.providers) {
+      const list = byProvider.get(p.id);
+      if (list && list.length > 0) {
+        groups.push({ label: p.name, models: list });
+        byProvider.delete(p.id);
+      }
+    }
+    // 归属未知服务商的遗留缓存模型兜底分组
+    for (const [pid, list] of byProvider) {
+      groups.push({ label: pid, models: list });
+    }
+    return groups;
+  }, [props.models, props.providers]);
 
   // 选择文件
   const pickFile = (path: string) => {
@@ -224,13 +251,27 @@ export function InputArea(props: Props): React.ReactElement {
             className="model-select"
             value={props.modelId}
             onChange={e => props.onModelChange(e.target.value)}
-            title="切换模型（即时生效，不丢失上下文）"
+            title="切换模型（按服务商分组，即时生效，不丢失上下文）"
           >
-            {props.models.map(m => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
+            {props.models.length === 0 && <option value={props.modelId}>{props.modelId || '暂无可用模型'}</option>}
+            {!props.models.some(m => m.id === props.modelId) && props.models.length > 0 && (
+              <option value={props.modelId}>{props.modelId}</option>
+            )}
+            {providerGroups.length > 1
+              ? providerGroups.map(g => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.models.map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))
+              : providerGroups[0]?.models.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
           </select>
           <select
             className="mode-select"
