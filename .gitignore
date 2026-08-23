@@ -1,5 +1,4 @@
 node_modules/
 dist/
-*.vsix
 .code-agent/
 .DS_Store
