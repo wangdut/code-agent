@@ -578,9 +578,12 @@ export class CodeAgentService {
     if (!trimmed && attachments.length === 0) {
       return;
     }
-    const apiKey = await this.config.getApiKey();
+    // V1.3.0 密钥校验对齐服务商体系：按当前模型所属服务商实时读取 SecretStorage（无内存缓存），
+    // 密钥重配置保存后即时生效；修复旧版读全局密钥导致重填密钥后仍报「未配置 API Key」的缺陷
+    const chatProvider = this.config.getProviderForModel(modelId);
+    const apiKey = await this.config.getProviderApiKey(chatProvider.id);
     if (!apiKey) {
-      controller.post({ type: 'chat:error', sessionId, messageId: '', error: '未配置 API Key，请点击右上角设置按钮，在「模型配置」中填写 API Key' });
+      controller.post({ type: 'chat:error', sessionId, messageId: '', error: `服务商「${chatProvider.name}」未配置 API Key，请点击右上角设置按钮，在「模型配置」中为该服务商填写密钥` });
       return;
     }
 
@@ -742,11 +745,13 @@ export class CodeAgentService {
     } catch (err) {
       flushStream();
       finishStream();
+      const raw = err instanceof Error ? err.message : String(err);
       controller.post({
         type: 'chat:error',
         sessionId,
         messageId,
-        error: err instanceof Error ? err.message : String(err)
+        // V1.3.0：运行期鉴权失败精准提示（发起前已拦截未配置密钥，此处必为密钥无效/鉴权失败）
+        error: classifyRuntimeModelError(raw)
       });
       this.broadcastSessionList();
     }
@@ -976,18 +981,18 @@ export class CodeAgentService {
 
   // ---------- 服务商管理 ----------
 
-  /** 校验服务商配置：名称必填、Base URL 必填且为 http(s) 协议 */
+  /** 校验服务商配置：名称必填、Base URL 必填且为 http(s) 协议（无任何厂商白名单/名称匹配限制，全量开放自定义接入） */
   private validateProviderInput(name: string, baseUrl: string): string | undefined {
     if (!name.trim()) {
       return '服务商名称不能为空';
     }
     if (!/^https?:\/\/.+/i.test(baseUrl.trim())) {
-      return '接口 Base URL 必须以 http:// 或 https:// 开头';
+      return '接口 Base URL 格式不正确，请检查输入';
     }
     return undefined;
   }
 
-  async handleProviderAdd(controller: WebviewController, name: string, baseUrl: string, apiKey?: string, presetId?: string): Promise<void> {
+  async handleProviderAdd(controller: WebviewController, name: string, baseUrl: string, apiKey?: string, presetId?: string, forceCreate?: boolean): Promise<void> {
     const invalid = this.validateProviderInput(name, baseUrl);
     if (invalid) {
       controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: invalid });
@@ -1008,17 +1013,32 @@ export class CodeAgentService {
     await this.sendSettings(controller);
     // 新增完成后立即拉取该服务商模型列表（无密钥时使用预置兜底列表，拉取失败返回精准错误原因）
     const res = await this.syncProviderModels(id);
+    // V1.3.0 强制创建兜底：拉取失败默认回滚新增（避免无效服务商残留）；勾选「仍要创建」后保留服务商，用户手动添加模型后即可正常调用
+    if (!res.ok) {
+      if (!forceCreate) {
+        await this.config.deleteProvider(id);
+        await this.config.clearProviderApiKey(id);
+        // 清除拉取失败残留的同步错误状态：预置目录稳定 id 重试新增时不会短暂误展示上一轮错误
+        this.config.setProviderSyncState(id, {});
+        await this.sendSettings(controller);
+        this.broadcastSettings();
+        controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: `服务商新增失败：${res.error ?? '模型列表拉取失败'}。如确认 Base URL 与密钥无误，可勾选「仍要创建（手动添加模型）」重试` });
+        return;
+      }
+      await this.sendSettings(controller);
+      this.broadcastSettings();
+      void vscode.window.showWarningMessage(`「${name.trim()}」已强制创建：模型列表拉取失败（${res.error ?? '未知原因'}），请在模型参数配置区手动添加模型后即可正常调用`);
+      return;
+    }
     await this.sendSettings(controller);
     this.broadcastSettings();
-    if (res.ok && res.usedFallback) {
+    if (res.usedFallback) {
       void vscode.window.showInformationMessage(`「${name.trim()}」已添加：未配置 API 密钥，使用预置模型列表；配置密钥后可自动同步最新模型`);
       if (catalogHit?.note) {
         void vscode.window.showWarningMessage(`「${name.trim()}」接入提示：${catalogHit.note}`);
       }
-    } else if (res.ok) {
+    } else {
       void vscode.window.showInformationMessage(`「${name.trim()}」已添加，模型列表同步成功`);
-    } else if (res.error) {
-      controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: `服务商已添加，但模型列表拉取失败：${res.error}` });
     }
   }
 
@@ -1182,16 +1202,27 @@ function humanizeModelName(id: string): string {
  */
 function classifySyncError(msg: string): string {
   if (/\b(401|403)\b/.test(msg) || /unauthorized|forbidden|invalid.*key|api.?key/i.test(msg)) {
-    return `鉴权失败：API Key 未配置或无效（${msg}）`;
+    return `API Key 鉴权失败，请检查密钥有效性（${msg}）`;
   }
   if (/\b404\b/.test(msg) || /not found/i.test(msg)) {
-    return `接口不兼容：Base URL 下未找到 /models 接口（${msg}），请核实地址与协议兼容性`;
+    return `接口未兼容 OpenAI 协议规范，无法拉取模型列表（${msg}）`;
   }
   if (/超时|timeout|timed out/i.test(msg)) {
-    return `网络异常：模型列表请求超时（${msg}），可检查代理配置后重试`;
+    return `无法连接至接口地址，请检查网络与 Base URL 是否正确（请求超时：${msg}）`;
   }
   if (/ECONNREFUSED|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|网络请求失败/i.test(msg)) {
-    return `网络异常：无法连接服务商接口（${msg}）`;
+    return `无法连接至接口地址，请检查网络与 Base URL 是否正确（${msg}）`;
+  }
+  return msg;
+}
+
+/**
+ * 运行期模型调用错误分类（V1.3.0）：发起前已拦截「未配置密钥」场景，
+ * 运行期命中鉴权类错误必为密钥无效/过期，与未配置场景区分提示
+ */
+function classifyRuntimeModelError(msg: string): string {
+  if (/\b(401|403)\b/.test(msg) || /unauthorized|forbidden|invalid.*key/i.test(msg)) {
+    return `API Key 鉴权失败，请检查密钥有效性（${msg}）`;
   }
   return msg;
 }

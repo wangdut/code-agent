@@ -291,7 +291,7 @@ export type WebviewToExtensionMessage =
   | { type: 'model:add'; model: ModelMeta }
   | { type: 'model:update'; oldId: string; model: ModelMeta }
   | { type: 'model:delete'; modelId: string }
-  | { type: 'provider:add'; name: string; baseUrl: string; apiKey?: string; presetId?: string }
+  | { type: 'provider:add'; name: string; baseUrl: string; apiKey?: string; presetId?: string; forceCreate?: boolean }
   | { type: 'provider:update'; id: string; name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean }
   | { type: 'provider:delete'; id: string }
   | { type: 'provider:refresh'; id: string }

@@ -31,7 +31,7 @@ VS Code Code Agent 插件V0.3.0迭代需求规格说明书.md， 我发现这个
 ## 根因分析（逐条对应你反馈的问题）
 
 ### 1. 会话列表全空（负优化的真正根因）
-[readMeta](file:///c:/Users/29003/Desktop/qoder_deepseek_test2/src/sessions/sessionManager.ts) 的「截断解析」存在一个致命缺陷：截断到 `"messages"` 字段前时，上一字段的**尾随逗号未移除**，`JSON.parse` 必然抛错。我用 node 模拟验证确认了这一点（修复前 `PARSE FAIL`，修复后 `PARSE OK`）。
+[readMeta](../src/sessions/sessionManager.ts) 的「截断解析」存在一个致命缺陷：截断到 `"messages"` 字段前时，上一字段的**尾随逗号未移除**，`JSON.parse` 必然抛错。我用 node 模拟验证确认了这一点（修复前 `PARSE FAIL`，修复后 `PARSE OK`）。
 
 这解释了你的全部现象：
 - 启动扫描时**每个会话文件都被误判为损坏**并跳过 → 历史会话全空；
@@ -43,18 +43,18 @@ VS Code Code Agent 插件V0.3.0迭代需求规格说明书.md， 我发现这个
 旧实现用 `充值 + 赠金 − 当前余额` 推算已用金额，但 DeepSeek 扣费**优先扣赠金**，该公式恒为 0。且余额接口本身无法推导累计消费。
 
 修复（新口径，与需求一致）：
-- 新增 [modelPricing.ts](file:///c:/Users/29003/Desktop/qoder_deepseek_test2/src/models/modelPricing.ts)：DeepSeek 官方单价表（chat 输入 ¥2/M 输出 ¥8/M，reasoner 输入 ¥4/M 输出 ¥16/M，其他服务商回退默认价）；
-- [agentEngine.ts](file:///c:/Users/29003/Desktop/qoder_deepseek_test2/src/agent/agentEngine.ts) 每次调用完成后按 `单价 × Token 用量` 估算金额，传入 [usageTracker.ts](file:///c:/Users/29003/Desktop/qoder_deepseek_test2/src/sessions/usageTracker.ts) 按**自然日**累计并持久化（兼容旧用量文件）；
+- 新增 [modelPricing.ts](../src/models/modelPricing.ts)：DeepSeek 官方单价表（chat 输入 ¥2/M 输出 ¥8/M，reasoner 输入 ¥4/M 输出 ¥16/M，其他服务商回退默认价）；
+- [agentEngine.ts](../src/agent/agentEngine.ts) 每次调用完成后按 `单价 × Token 用量` 估算金额，传入 [usageTracker.ts](../src/sessions/usageTracker.ts) 按**自然日**累计并持久化（兼容旧用量文件）；
 - 余额接口只返回余额快照，服务层拼接 `余额 X.XX CNY（已用 Y.YY CNY）`，接口异常仍走「查询失败」兜底。
 
 ### 3. Token 统计口径（需求 1.1）
 校准机制（模型侧 `prompt_tokens`）此前已落地，但审查发现两个口径问题：
-- **无快照时的启发式估算高估**：CJK 按 1 token/字符估算，中文会话会比 DeepSeek 实际占用高估 60%+，已修正为 0.6 token/字符（[tokenCounter.ts](file:///c:/Users/29003/Desktop/qoder_deepseek_test2/src/context/tokenCounter.ts)）；
-- **压缩/重新生成后旧校准快照未清除**：链长重新增长后会误用压缩前的 `promptBase` 高估占用，已在 [contextManager.ts](file:///c:/Users/29003/Desktop/qoder_deepseek_test2/src/context/contextManager.ts) 压缩完成与 [codeAgentService.ts](file:///c:/Users/29003/Desktop/qoder_deepseek_test2/src/services/codeAgentService.ts) 重新生成处主动清除快照。
+- **无快照时的启发式估算高估**：CJK 按 1 token/字符估算，中文会话会比 DeepSeek 实际占用高估 60%+，已修正为 0.6 token/字符（[tokenCounter.ts](../src/context/tokenCounter.ts)）；
+- **压缩/重新生成后旧校准快照未清除**：链长重新增长后会误用压缩前的 `promptBase` 高估占用，已在 [contextManager.ts](../src/context/contextManager.ts) 压缩完成与 [codeAgentService.ts](../src/services/codeAgentService.ts) 重新生成处主动清除快照。
 
 ### 4. 代码审查额外发现并修复
-- [SessionList.tsx](file:///c:/Users/29003/Desktop/qoder_deepseek_test2/webview-ui/components/SessionList.tsx)：收起态挂载时高度测量（ResizeObserver）未建立，展开后可视窗口退化为 1 行；已改为依赖 `collapsed` 重新测量；
-- [App.tsx](file:///c:/Users/29003/Desktop/qoder_deepseek_test2/webview-ui/App.tsx)：外部点击收起的例外选择器 `.session-sidebar` 与实际类名不符，已对齐为 `.session-list`。
+- [SessionList.tsx](../webview-ui/components/SessionList.tsx)：收起态挂载时高度测量（ResizeObserver）未建立，展开后可视窗口退化为 1 行；已改为依赖 `collapsed` 重新测量；
+- [App.tsx](../webview-ui/App.tsx)：外部点击收起的例外选择器 `.session-sidebar` 与实际类名不符，已对齐为 `.session-list`。
 
 ## 验证结果
 - `typecheck` ✅ / `build` ✅ / `vsce package` ✅
@@ -81,7 +81,7 @@ VS Code Code Agent 插件V0.3.0迭代需求规格说明书.md， 我发现这个
 
 ## 修复内容
 
-**1. [SessionList.tsx](file:///c:/Users/29003/Desktop/qoder_deepseek_test2/webview-ui/components/SessionList.tsx) — 两段式内联确认**
+**1. [SessionList.tsx](../webview-ui/components/SessionList.tsx) — 两段式内联确认**
 - 点击「删除」→ 按钮变为「**确认删除？**」，再次点击才真正发送删除消息
 - 5 秒内未确认自动还原为「删除」，防误触
 - 菜单关闭（ESC/点击外部/导出等）时同步清除确认态，无状态残留

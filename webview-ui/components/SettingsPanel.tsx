@@ -73,15 +73,23 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
   };
 
   const saveModel = (model: ModelMeta) => {
-    post({ type: 'model:update', oldId: model.id, model });
+    const withProvider = model.providerId ? model : { ...model, providerId: selectedProviderId || 'deepseek' };
+    // V1.3.0：编辑已有模型走 update；「＋ 添加模型」入口（原始 id 为空/不在列表）走 add，支持强制创建服务商后手动补模型
+    if (editingModel && editingModel.id && form.models.some(x => x.id === editingModel.id)) {
+      post({ type: 'model:update', oldId: editingModel.id, model: withProvider });
+    } else {
+      post({ type: 'model:add', model: withProvider });
+    }
     setEditingModel(null);
   };
 
-  const saveProvider = (p: { name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean; presetId?: string }) => {
-    if (editingProvider) {
+  const saveProvider = (p: { name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean; presetId?: string; forceCreate?: boolean }) => {
+    // V1.3.0 缺陷修复：新增弹窗的 editingProvider 是 id 为空的占位对象，必须按 id 判定编辑/新增——
+    // 旧版按对象存在性判定，导致新增被误发为「编辑空 id」，后端报「服务商不存在」
+    if (editingProvider && editingProvider.id) {
       post({ type: 'provider:update', id: editingProvider.id, name: p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, clearApiKey: p.clearApiKey });
     } else {
-      post({ type: 'provider:add', name: p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, presetId: p.presetId });
+      post({ type: 'provider:add', name: p.name, baseUrl: p.baseUrl, apiKey: p.apiKey, presetId: p.presetId, forceCreate: p.forceCreate });
     }
     setEditingProvider(null);
   };
@@ -166,73 +174,87 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
               </button>
             </div>
           </Field>
-          <Field
-            label="默认服务商"
-            tooltip="当前生效的服务商：主界面底部模型切换下拉框仅展示该服务商下的模型；默认模型条目随该服务商联动；切换后主界面模型列表实时同步刷新"
-            hint="切换后：底部模型下拉框与默认模型同步跟随，不同服务商模型分区不混杂"
-          >
-            <select className="text-input" value={form.defaultProvider} onChange={e => changeDefaultProvider(e.target.value)}>
-              {form.providers.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </Field>
-          <Field
-            label="模型参数配置区服务商"
-            tooltip="模型参数配置区展示选中服务商下的所有模型，可针对单个模型校准上下文窗口与最大输出 Token 等元数据"
-            hint="下方模型列表仅展示所选服务商的模型"
-          >
-            <select className="text-input" value={selectedProviderId} onChange={e => setSelectedProviderId(e.target.value)}>
-              {form.providers.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="模型列表" hint="元数据接口未返回时套用全局默认（300k 上下文 / 100k 输出），可逐模型校准">
-            <div className="model-list">
-              {form.models.filter(m => (m.providerId ?? 'deepseek') === selectedProviderId).map(m => (
-                <div key={m.id} className="model-item">
-                  <div className="model-item-info">
-                    <span className="model-name">{m.name}</span>
-                    <span className="model-meta">
-                      {m.id} · 上下文 {fmtWindow(m.contextWindow)} · 输出 {fmtWindow(m.maxOutputTokens)}
-                    </span>
+          {/* V1.3.0 运行配置分组：运行时生效的全局配置，决定新建会话的默认服务商与模型 */}
+          <div className="config-group">
+            <div className="config-group-title">运行配置 · 全局默认</div>
+            <Field
+              label="默认服务商（全局默认）"
+              tooltip="运行时生效的全局配置：决定插件启动、新建会话时默认使用的模型服务商，直接决定主界面默认加载的模型列表；主界面底部模型切换下拉框仅展示该服务商下的模型"
+              hint="新建会话默认使用的服务商，切换后主界面模型列表同步更新，参数编辑区同步跟随"
+            >
+              <select className="text-input" value={form.defaultProvider} onChange={e => changeDefaultProvider(e.target.value)}>
+                {form.providers.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field
+              label="默认模型"
+              tooltip="新会话默认使用的模型；仅展示当前默认服务商下的模型（与默认服务商联动），切换后即时生效；上下文统计与窗口阈值同步适配该模型元数据"
+            >
+              <select className="text-input" value={form.defaultModel} onChange={e => set('defaultModel', e.target.value)}>
+                {(() => {
+                  const modelsOfProvider = form.models.filter(m => (m.providerId ?? 'deepseek') === form.defaultProvider);
+                  return (
+                    <>
+                      {modelsOfProvider.length === 0 && (
+                        <option value="">暂无可用模型（请先为该服务商配置密钥后刷新模型列表）</option>
+                      )}
+                      {form.defaultModel && !modelsOfProvider.some(m => m.id === form.defaultModel) && (
+                        <option value={form.defaultModel}>{form.defaultModel}（当前默认·其他服务商）</option>
+                      )}
+                      {modelsOfProvider.map(m => (
+                        <option key={m.id} value={m.id}>{m.name} ({m.id})</option>
+                      ))}
+                    </>
+                  );
+                })()}
+              </select>
+            </Field>
+          </div>
+          {/* V1.3.0 编辑配置分组：配置页编辑选择器，仅切换查看/修改模型元数据的目标服务商，不影响运行中的默认服务商 */}
+          <div className="config-group">
+            <div className="config-group-title">编辑配置 · 参数编辑区</div>
+            <Field
+              label="编辑目标服务商"
+              tooltip="配置页编辑选择器：仅用于切换当前要查看、修改模型元数据的目标服务商，不影响当前运行中的默认服务商状态，也不改变会话的实际使用配置"
+              hint="选择要查看/修改模型参数的服务商，不影响当前默认使用的服务商"
+            >
+              <select className="text-input" value={selectedProviderId} onChange={e => setSelectedProviderId(e.target.value)}>
+                {form.providers.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="模型列表" hint="元数据接口未返回时套用全局默认（300k 上下文 / 100k 输出），可逐模型校准">
+              <div className="model-list">
+                {form.models.filter(m => (m.providerId ?? 'deepseek') === selectedProviderId).map(m => (
+                  <div key={m.id} className="model-item">
+                    <div className="model-item-info">
+                      <span className="model-name">{m.name}</span>
+                      <span className="model-meta">
+                        {m.id} · 上下文 {fmtWindow(m.contextWindow)} · 输出 {fmtWindow(m.maxOutputTokens)}
+                      </span>
+                    </div>
+                    <div className="model-item-actions">
+                      <button className="mini-btn" onClick={() => setEditingModel({ ...m })}>编辑元数据</button>
+                    </div>
                   </div>
-                  <div className="model-item-actions">
-                    <button className="mini-btn" onClick={() => setEditingModel({ ...m })}>编辑元数据</button>
+                ))}
+                {form.models.filter(m => (m.providerId ?? 'deepseek') === selectedProviderId).length === 0 && (
+                  <div className="empty-hint">
+                    暂无模型缓存。请配置 API Key 后点击服务商右侧「↻ 刷新」拉取模型列表；离线时将使用上次同步的本地缓存；接口不兼容时可用下方「＋ 添加模型」手动录入。
                   </div>
-                </div>
-              ))}
-              {form.models.filter(m => (m.providerId ?? 'deepseek') === selectedProviderId).length === 0 && (
-                <div className="empty-hint">
-                  暂无模型缓存。请配置 API Key 后点击服务商右侧「↻ 刷新」拉取模型列表；离线时将使用上次同步的本地缓存。
-                </div>
-              )}
-            </div>
-          </Field>
-          <Field
-            label="默认模型"
-            tooltip="新会话默认使用的模型；仅展示当前默认服务商下的模型（与默认服务商联动），切换后即时生效；上下文统计与窗口阈值同步适配该模型元数据"
-          >
-            <select className="text-input" value={form.defaultModel} onChange={e => set('defaultModel', e.target.value)}>
-              {(() => {
-                const modelsOfProvider = form.models.filter(m => (m.providerId ?? 'deepseek') === form.defaultProvider);
-                return (
-                  <>
-                    {modelsOfProvider.length === 0 && (
-                      <option value="">暂无可用模型（请先为该服务商配置密钥后刷新模型列表）</option>
-                    )}
-                    {form.defaultModel && !modelsOfProvider.some(m => m.id === form.defaultModel) && (
-                      <option value={form.defaultModel}>{form.defaultModel}（当前默认·其他服务商）</option>
-                    )}
-                    {modelsOfProvider.map(m => (
-                      <option key={m.id} value={m.id}>{m.name} ({m.id})</option>
-                    ))}
-                  </>
-                );
-              })()}
-            </select>
-          </Field>
+                )}
+              </div>
+              <button
+                className="btn add-model-btn"
+                onClick={() => setEditingModel({ id: '', name: '', contextWindow: 300000, maxOutputTokens: 100000, pricing: '按量计费', providerId: selectedProviderId })}
+              >
+                ＋ 添加模型
+              </button>
+            </Field>
+          </div>
           <div className="field-row">
             <Field label="请求超时 (ms)" tooltip="模型接口请求超时时间；网络不稳定时建议调大">
               <input className="text-input" type="number" value={form.requestTimeout} onChange={e => set('requestTimeout', Number(e.target.value))} />
@@ -475,15 +497,19 @@ function UsageStat({ label, value }: { label: string; value: number }): React.Re
  */
 function ModelEditor({ model, onSave, onCancel }: { model: ModelMeta; onSave: (m: ModelMeta) => void; onCancel: () => void }): React.ReactElement {
   const [m, setM] = useState<ModelMeta>(model);
-  const valid = m.name.trim() && m.contextWindow > 0 && m.maxOutputTokens > 0 && m.maxOutputTokens <= m.contextWindow;
+  const isAdd = !model.id;
+  const valid = m.id.trim().length > 0 && m.name.trim() && m.contextWindow > 0 && m.maxOutputTokens > 0 && m.maxOutputTokens <= m.contextWindow;
   return (
     <div className="permission-backdrop">
       <div className="model-editor">
         <div className="permission-header">
-          <span className="permission-title">模型元数据校准</span>
+          <span className="permission-title">{isAdd ? '添加模型' : '模型元数据校准'}</span>
         </div>
-        <Field label="模型标识 (id)" hint="API 调用使用的模型名，由服务商模型列表提供">
-          <input className="text-input" value={m.id} readOnly />
+        <Field
+          label="模型标识 (id)"
+          hint={isAdd ? 'API 调用使用的模型名，按服务商支持的模型 id 填写（如 moonshot-v1-32k）' : 'API 调用使用的模型名，由服务商模型列表提供'}
+        >
+          <input className="text-input" value={m.id} readOnly={!isAdd} onChange={e => setM({ ...m, id: e.target.value })} />
         </Field>
         <Field label="展示名称">
           <input className="text-input" value={m.name} onChange={e => setM({ ...m, name: e.target.value })} />
@@ -528,7 +554,7 @@ function ProviderEditor({
 }: {
   provider: ProviderInfo;
   presetProviders: Array<{ id: string; name: string; baseUrl: string; hasFallbackModels: boolean; note?: string }>;
-  onSave: (p: { name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean; presetId?: string }) => void;
+  onSave: (p: { name: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean; presetId?: string; forceCreate?: boolean }) => void;
   onCancel: () => void;
 }): React.ReactElement {
   const isEdit = !!provider.id;
@@ -537,6 +563,8 @@ function ProviderEditor({
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [clearKey, setClearKey] = useState(false);
+  /** V1.3.0 强制创建：模型拉取失败时仍完成服务商创建，后续手动添加模型（仅新增模式生效） */
+  const [forceCreate, setForceCreate] = useState(false);
   /** 当前展开的建议下拉（空为收起） */
   const [openSuggest, setOpenSuggest] = useState<'' | 'name' | 'url'>('');
   /** 选中的预置厂商 id（随提交上报，服务端据此使用稳定 id 匹配兜底模型数据） */
@@ -673,7 +701,10 @@ function ProviderEditor({
         {isEdit && provider.hasApiKey && (
           <Checkbox label="清除已配置的密钥" checked={clearKey} onChange={setClearKey} />
         )}
-        {!urlValid && baseUrl.trim() && <div className="param-warning">⚠ Base URL 必须以 http:// 或 https:// 开头</div>}
+        {!isEdit && (
+          <Checkbox label="仍要创建（模型拉取失败时强制创建，手动添加模型）" checked={forceCreate} onChange={setForceCreate} />
+        )}
+        {!urlValid && baseUrl.trim() && <div className="param-warning">⚠ 接口 Base URL 格式不正确，请检查输入</div>}
         <div className="permission-actions">
           <button className="btn" onClick={onCancel}>取消</button>
           <button
@@ -685,7 +716,8 @@ function ProviderEditor({
                 baseUrl: baseUrl.trim(),
                 apiKey: apiKey || undefined,
                 clearApiKey: clearKey || undefined,
-                presetId: !isEdit && selectedPresetId ? selectedPresetId : undefined
+                presetId: !isEdit && selectedPresetId ? selectedPresetId : undefined,
+                forceCreate: !isEdit && forceCreate ? true : undefined
               })
             }
           >

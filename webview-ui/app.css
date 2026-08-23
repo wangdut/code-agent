@@ -1581,6 +1581,26 @@ button {
   align-self: flex-start;
 }
 
+/* V1.3.0 设置页配置分组：运行配置（全局默认）与编辑配置（参数编辑区）视觉分区 */
+.config-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--vscode-widget-border, var(--vscode-input-border, transparent));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--vscode-input-background) 30%, transparent);
+}
+
+.config-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--vscode-descriptionForeground);
+  border-bottom: 1px dashed var(--vscode-widget-border, var(--vscode-input-border, transparent));
+  padding-bottom: 5px;
+}
+
 /* V1.2.0 新增服务商弹窗：预置厂商下拉建议复合输入框 */
 .suggest-wrap {
   position: relative;
