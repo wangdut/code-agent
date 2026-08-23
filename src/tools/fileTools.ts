@@ -9,7 +9,7 @@ import * as vscode from 'vscode';
 import { exec, execFile } from 'child_process';
 import { SecurityManager } from '../security/securityManager';
 import { AuditLogger } from '../security/auditLogger';
-import { PermissionRequest } from '../types';
+import { PermissionRequest, RunMode } from '../types';
 import { truncate } from '../utils/id';
 
 /** 工具执行结果 */
@@ -37,6 +37,8 @@ export interface ToolContext {
   audit: AuditLogger;
   requestPermission: PermissionRequester;
   sessionId: string;
+  /** 当前运行模式（V1.0.0 双层体系第一层：写入/终端工具执行前按模式拦截） */
+  mode: RunMode;
   /** 终端输出流回调（实时展示） */
   onCommandOutput?: (command: string, chunk: string) => void;
   signal?: AbortSignal;
@@ -160,10 +162,12 @@ export async function writeFileTool(args: any, ctx: ToolContext): Promise<ToolRe
     finalContent = originalContent!.replace(oldContent, newContent);
   }
 
-  // 权限判定
-  const check = ctx.security.checkFileWrite(filePath, finalContent, existed ? originalContent : undefined);
+  // 权限判定（V1.0.0 双层体系：第一层模式拦截 + 第二层权限管理，执行层统一校验）
+  const check = ctx.security.checkFileWrite(filePath, finalContent, ctx.mode, existed ? originalContent : undefined);
   if (check.decision === 'deny') {
-    return { success: false, output: `权限拒绝：禁止写入 ${filePath}`, denied: true };
+    const detail = check.reason ?? (existed ? '工作区外文件禁止写入' : '当前模式禁止写入');
+    ctx.audit.log({ type: 'file', action: 'write', target: filePath, result: 'denied', detail, sessionId: ctx.sessionId });
+    return { success: false, output: check.reason ? `权限拒绝：${check.reason}` : `权限拒绝：禁止写入 ${filePath}`, denied: true };
   }
   if (check.decision === 'confirm' && check.request) {
     const approved = await ctx.requestPermission(check.request);
@@ -346,8 +350,8 @@ export async function executeCommandTool(args: any, ctx: ToolContext): Promise<T
   const cwdRaw = args.cwd ? ctx.security.resolvePath(String(args.cwd)) : (absWorkspaceRoot() ?? process.cwd());
   const cwd = fs.existsSync(cwdRaw) ? cwdRaw : (absWorkspaceRoot() ?? process.cwd());
 
-  // 权限判定
-  const check = ctx.security.checkCommand(cwd, command);
+  // 权限判定（V1.0.0 双层体系：对话模式终端全局禁用）
+  const check = ctx.security.checkCommand(cwd, command, ctx.mode);
   if (check.decision === 'confirm' && check.request) {
     const approved = await ctx.requestPermission(check.request);
     if (!approved) {
@@ -356,7 +360,8 @@ export async function executeCommandTool(args: any, ctx: ToolContext): Promise<T
     }
   }
   if (check.decision === 'deny') {
-    return { success: false, output: '命令执行被拒绝', denied: true };
+    ctx.audit.log({ type: 'command', action: 'execute', target: command, result: 'denied', detail: check.reason ?? '命令执行被拒绝', sessionId: ctx.sessionId });
+    return { success: false, output: check.reason ? `权限拒绝：${check.reason}` : '命令执行被拒绝', denied: true };
   }
 
   return new Promise(resolve => {

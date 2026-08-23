@@ -1,8 +1,10 @@
 /**
- * 安全权限体系
- * - 文件读取权限：任何运行模式下完整开放（工作区内 + 工作区外本地文件/目录，无需确认）
- * - 文件写入分级权限：工作区内（询问/全自动，全自动直接放行）、工作区外任何模式下只读不可修改
- * - 终端操作权限：默认确认、工作区内命令可免确认（不受询问/全自动模式影响）、高危命令强制二次确认
+ * 安全权限体系（V1.0.0 双层权限体系）
+ * 第一层「运行模式」：决定插件整体能力边界，控制可用工具集范围，是所有权限规则的前置判断条件
+ *   - 对话模式：读取全域开放（工作区内/外，无需确认）；写入/终端全局禁用
+ *   - 智能体模式：读取全域开放；写入仅限工作区内；终端完整保留
+ * 第二层「权限管理」（仅智能体模式下生效）：询问/全自动，仅控制工作区内文件写入的确认机制
+ * 终端操作：默认确认、工作区内命令可免确认（不受询问/全自动模式影响）、高危命令强制二次确认
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -113,7 +115,7 @@ export class SecurityManager {
   }
 
   /**
-   * 统一权限校验（V0.9.0 工具执行前置链路）
+   * 统一权限校验（V0.9.0 工具执行前置链路；V1.0.0 双层体系第一层）
    * 基于当前运行模式判定工具合法性，所有工具调用必须经过该校验层：
    *   - 智能体模式：全部工具放行（文件写/命令权限由各自判定方法控制）
    *   - 对话模式：仅放行只读工具，写入/终端类工具在执行前拦截（调度层屏蔽之外的执行层兜底）
@@ -126,20 +128,22 @@ export class SecurityManager {
   }
 
   /**
-   * 文件写入权限判定
-   * 工作区外文件任何运行模式下强制只读（拒绝写入）；
-   * 工作区内：询问模式（ask）每次修改前确认，全自动模式（auto）直接放行——
-   * 询问/全自动模式的区分仅作用于工作区内文件的修改/编辑/新增/删除
+   * 文件写入权限判定（V1.0.0 双层体系：第一层模式判断 + 第二层权限管理）
+   * 第一层（前置）：对话模式下写入全局禁用，直接拒绝（执行层兜底，与调度层屏蔽双保险）；
+   * 第二层：智能体模式下工作区外文件强制只读；工作区内按权限管理判定——
+   *   询问模式（ask）每次修改前确认，全自动模式（auto）直接放行
    * @returns 'allow' 直接允许 | 'deny' 直接拒绝 | 'confirm' 需要确认
    */
-  checkFileWrite(absPath: string, content: string, oldContent?: string): { decision: 'allow' | 'deny' | 'confirm'; request?: PermissionRequest } {
+  checkFileWrite(absPath: string, content: string, mode: RunMode, oldContent?: string): { decision: 'allow' | 'deny' | 'confirm'; request?: PermissionRequest; reason?: string } {
+    if (mode === 'chat') {
+      return { decision: 'deny', reason: CHAT_MODE_DENY_HINT };
+    }
     if (!this.isInWorkspace(absPath)) {
       // 工作区外文件强制只读
       return { decision: 'deny' };
     }
-    const mode = this.config.getFileWritePermission();
     // 全自动模式：常规文件写入直接放行
-    if (mode === 'auto' || this.config.getPermissionMode() === 'auto') {
+    if (this.config.getPermissionMode() === 'auto') {
       return { decision: 'allow' };
     }
     const request: PermissionRequest = {
@@ -153,8 +157,14 @@ export class SecurityManager {
     return { decision: 'confirm', request };
   }
 
-  /** 终端命令权限判定（V0.9.0 修订：询问/全自动模式仅作用于工作区内文件修改，命令免确认仅由终端免确认开关控制） */
-  checkCommand(cwd: string, command: string): { decision: 'allow' | 'deny' | 'confirm'; request?: PermissionRequest; highRisk: boolean } {
+  /**
+   * 终端命令权限判定（V1.0.0 双层体系第一层：对话模式下终端全局禁用；
+   * 询问/全自动模式仅作用于智能体模式工作区内文件修改，命令免确认仅由终端免确认开关控制）
+   */
+  checkCommand(cwd: string, command: string, mode: RunMode): { decision: 'allow' | 'deny' | 'confirm'; request?: PermissionRequest; highRisk: boolean; reason?: string } {
+    if (mode === 'chat') {
+      return { decision: 'deny', highRisk: false, reason: CHAT_MODE_DENY_HINT };
+    }
     const risk = this.checkCommandRisk(command);
     const highRiskBlocked = this.config.getHighRiskCommandsEnabled() && risk.isHighRisk;
     const inWorkspace = this.isInWorkspace(cwd);

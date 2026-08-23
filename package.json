@@ -2,7 +2,7 @@
   "name": "code-agent",
   "displayName": "Code Agent",
   "description": "基于大语言模型的智能编程 Agent：代码生成、文件编辑、终端执行、多轮任务自主闭环",
-  "version": "0.9.0",
+  "version": "1.0.0",
   "publisher": "wangh",
   "author": {
     "name": "wangh"
@@ -134,7 +134,7 @@
             "agent"
           ],
           "default": "agent",
-          "description": "默认运行模式：对话模式（纯问答）/ 智能体模式（可调用工具）"
+          "description": "双层权限体系第一层：默认运行模式——对话模式（只读文件问答，写入/终端全局禁用）/ 智能体模式（完整 Agent 能力，读写工作区文件、执行终端命令）"
         },
         "codeAgent.requestTimeout": {
           "type": "number",
@@ -179,16 +179,7 @@
             "auto"
           ],
           "default": "ask",
-          "description": "权限模式：询问模式（修改工作区内文件前提示确认，推荐）/ 全自动模式（修改工作区内文件自动放行）；询问/全自动仅作用于智能体模式下工作区内文件的修改，工作区外文件任何模式下只读"
-        },
-        "codeAgent.fileWritePermission": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "ask"
-          ],
-          "default": "ask",
-          "description": "工作区内文件修改权限：全自动模式 / 询问模式（每次修改前展示 diff 预览）"
+          "description": "双层权限体系第二层：权限管理（仅智能体模式下生效，对话模式下不生效）——询问模式（修改工作区内文件前提示确认，推荐）/ 全自动模式（修改工作区内文件自动放行）；仅作用于智能体模式下工作区内文件的写入，工作区外文件任何模式下只读"
         },
         "codeAgent.terminalAutoApprove": {
           "type": "boolean",

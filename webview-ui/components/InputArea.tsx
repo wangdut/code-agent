@@ -242,17 +242,26 @@ export function InputArea(props: Props): React.ReactElement {
             <option value="chat">对话模式</option>
           </select>
           <select
-            className={`permission-select permission-${props.permissionMode}`}
-            value={props.permissionMode}
+            className={`permission-select${props.mode === 'chat' ? ' permission-locked' : ` permission-${props.permissionMode}`}`}
+            value={props.mode === 'chat' ? 'readonly' : props.permissionMode}
+            disabled={props.mode === 'chat'}
             onChange={e => props.onPermissionModeChange(e.target.value as 'ask' | 'auto')}
             title={
-              props.permissionMode === 'auto'
-                ? '全自动模式：修改工作区内文件自动放行，工作区外文件只读；高危命令仍需确认'
-                : '询问模式：修改工作区内文件前提示确认，工作区外文件只读'
+              props.mode === 'chat'
+                ? '对话模式下仅支持只读文件问答，权限管理不生效；切换至智能体模式后可配置询问/全自动'
+                : props.permissionMode === 'auto'
+                  ? '全自动模式（仅智能体模式生效）：修改工作区内文件自动放行，工作区外文件只读；高危命令仍需确认'
+                  : '询问模式（仅智能体模式生效）：修改工作区内文件前提示确认，工作区外文件只读'
             }
           >
-            <option value="ask">🛡 询问模式</option>
-            <option value="auto">⚡ 全自动模式</option>
+            {props.mode === 'chat' ? (
+              <option value="readonly">🔒 对话模式·只读权限</option>
+            ) : (
+              <>
+                <option value="ask">🛡 询问模式</option>
+                <option value="auto">⚡ 全自动模式</option>
+              </>
+            )}
           </select>
         </div>
         {props.generating ? (

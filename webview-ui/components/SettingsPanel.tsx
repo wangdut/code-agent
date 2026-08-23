@@ -48,7 +48,6 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
         maxTokens: clampedMaxTokens,
         frequencyPenalty: Number(form.frequencyPenalty),
         permissionMode: form.permissionMode,
-        fileWritePermission: form.fileWritePermission,
         terminalAutoApprove: form.terminalAutoApprove,
         highRiskCommands: form.highRiskCommands,
         // 保存兜底：非数字/超范围回退为合法值（1-1000，默认 20）
@@ -199,14 +198,40 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
           </div>
         </Section>
 
-        {/* 3. Agent 行为 */}
-        <Section title="Agent 行为" icon="🤖">
-          <Field label="默认执行模式">
+        {/* 3. 运行模式（双层权限体系第一层：决定插件整体能力边界） */}
+        <Section title="运行模式" icon="🧭">
+          <Field
+            label="默认运行模式"
+            tooltip="双层权限体系第一层：决定插件整体能力边界与控制可用工具集范围，是所有权限规则的前置判断条件。作用于全局，设置插件启动时新会话的默认运行模式。\n\n智能体模式：完整 Agent 能力——读写工作区文件、执行终端命令、多轮任务自主闭环（工作区外文件只读）。\n\n对话模式：只读文件问答——可读取工作区内外文件与目录作答，禁止任何文件写入与终端命令。"
+            hint="新建会话默认采用的运行模式，可在底部快捷栏随时切换"
+          >
             <select className="text-input" value={form.defaultMode} onChange={e => set('defaultMode', e.target.value as 'chat' | 'agent')}>
               <option value="agent">智能体模式（完整工具集）</option>
               <option value="chat">对话模式（只读文件问答）</option>
             </select>
           </Field>
+        </Section>
+
+        {/* 4. 权限管理（双层权限体系第二层：仅智能体模式下生效） */}
+        <Section title="权限管理" icon="🛡" tag="仅智能体模式下生效">
+          <Field
+            label="文件写入确认方式"
+            tooltip="双层权限体系第二层：属于智能体模式下的子配置，仅控制智能体模式中工作区内文件写入操作的确认机制，对话模式下不生效、无作用。\n\n询问模式：修改工作区内文件前弹出确认面板（展示操作详情与 diff 预览），同意后执行；文件读取无需确认。\n\n全自动模式：工作区内文件增删改自主执行，无需逐次确认；仍严格限制在工作区范围内，工作区外文件任何模式下只读。"
+            hint="与底部快捷栏同步；读取操作与终端命令不受该模式影响"
+          >
+            <select className="text-input" value={form.permissionMode} onChange={e => set('permissionMode', e.target.value as 'ask' | 'auto')}>
+              <option value="ask">询问模式（推荐，修改文件前提示确认）</option>
+              <option value="auto">全自动模式（修改文件自动放行）</option>
+            </select>
+          </Field>
+          <div className="field-row">
+            <Checkbox label="工作区内终端命令免确认" checked={form.terminalAutoApprove} onChange={v => set('terminalAutoApprove', v)} />
+            <Checkbox label="高危命令拦截（破坏性命令强制二次确认）" checked={form.highRiskCommands} onChange={v => set('highRiskCommands', v)} />
+          </div>
+        </Section>
+
+        {/* 5. Agent 行为 */}
+        <Section title="Agent 行为" icon="🤖">
           <Field
             label="最大工具调用轮次"
             tooltip="单轮任务中 Agent 可自主调度工具的最大次数。正整数，范围 1-1000，默认 20；输入非数字、负数或超范围值将自动回退为合法值。保存后即时生效，作用于所有新建与续接的会话。"
@@ -229,10 +254,6 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
               }}
             />
           </Field>
-          <div className="field-row">
-            <Checkbox label="工作区内终端命令免确认" checked={form.terminalAutoApprove} onChange={v => set('terminalAutoApprove', v)} />
-            <Checkbox label="高危命令拦截（破坏性命令强制二次确认）" checked={form.highRiskCommands} onChange={v => set('highRiskCommands', v)} />
-          </div>
           <Field label="自动上下文压缩阈值" hint="上下文占用达到模型窗口该比例时自动压缩">
             <div className="range-row">
               <input
@@ -248,7 +269,7 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
           </Field>
         </Section>
 
-        {/* 4. 存储配置 */}
+        {/* 6. 存储配置 */}
         <Section title="存储配置" icon="💾">
           <Field label="历史对话存储路径" hint={`留空默认：${settings.effectiveHistoryPath}`}>
             <input className="text-input" value={form.historyPath} onChange={e => set('historyPath', e.target.value)} placeholder="留空使用工作区 .code-agent/history" />
@@ -263,23 +284,7 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
           </Field>
         </Section>
 
-        {/* 5. 安全权限 */}
-        <Section title="安全权限" icon="🛡">
-          <Field label="权限模式" hint="与底部快捷栏同步；仅作用于智能体模式下工作区内文件的修改，工作区外文件任何模式下只读">
-            <select className="text-input" value={form.permissionMode} onChange={e => set('permissionMode', e.target.value as 'ask' | 'auto')}>
-              <option value="ask">询问模式（推荐，修改文件前提示确认）</option>
-              <option value="auto">全自动模式（修改文件自动放行）</option>
-            </select>
-          </Field>
-          <Field label="工作区内文件修改权限">
-            <select className="text-input" value={form.fileWritePermission} onChange={e => set('fileWritePermission', e.target.value as 'auto' | 'ask')}>
-              <option value="ask">询问模式（每次修改前展示 diff 预览）</option>
-              <option value="auto">全自动模式（无需确认）</option>
-            </select>
-          </Field>
-        </Section>
-
-        {/* 6. 高级设置 */}
+        {/* 7. 高级设置 */}
         <Section title="高级设置" icon="🔧">
           <Field label="日志级别">
             <select className="text-input" value={form.logLevel} onChange={e => set('logLevel', e.target.value as any)}>
@@ -295,7 +300,7 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
           </div>
         </Section>
 
-        {/* 7. 用量统计 */}
+        {/* 8. 用量统计 */}
         <Section title="今日用量统计" icon="📊">
           <div className="usage-grid">
             {usage?.today ? (
@@ -325,12 +330,15 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
   );
 }
 
-function Section({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }): React.ReactElement {
+function Section({ title, icon, tag, children }: { title: string; icon: string; tag?: string; children: React.ReactNode }): React.ReactElement {
   const [open, setOpen] = useState(true);
   return (
     <div className="settings-section">
       <div className="section-header" onClick={() => setOpen(!open)}>
-        <span className="section-title">{icon} {title}</span>
+        <span className="section-title">
+          {icon} {title}
+          {tag && <span className="section-tag">{tag}</span>}
+        </span>
         <span className="section-toggle">{open ? '▾' : '▸'}</span>
       </div>
       {open && <div className="section-body">{children}</div>}

@@ -939,6 +939,17 @@ button {
   color: var(--vscode-editorWarning-foreground, #cca700);
 }
 
+/* 对话模式：权限下拉框置为禁用态（灰色不可点击），展示只读占位文案（V1.0.0 双层权限体系联动） */
+.permission-locked {
+  opacity: 0.55;
+  color: var(--vscode-disabledForeground, #858585);
+  cursor: not-allowed;
+}
+
+.permission-locked:focus {
+  border-color: var(--vscode-dropdown-border, var(--vscode-widget-border));
+}
+
 .model-select:focus,
 .mode-select:focus,
 .permission-select:focus {
@@ -1216,6 +1227,19 @@ button {
 .section-title {
   font-size: 13px;
   font-weight: 600;
+}
+
+/* 分组标题角标（V1.0.0：权限管理分组的「仅智能体模式下生效」标注） */
+.section-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
+  border-radius: 10px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  vertical-align: 1px;
 }
 
 .section-toggle {

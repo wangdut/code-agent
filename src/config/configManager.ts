@@ -127,12 +127,12 @@ export class ConfigManager {
 
   // ---------- 安全权限 ----------
 
+  /**
+   * 权限管理（第二层，仅智能体模式下生效）：ask 询问 / auto 全自动
+   * 仅控制智能体模式下工作区内文件写入的确认机制；对话模式下不生效、无作用
+   */
   getPermissionMode(): 'ask' | 'auto' {
     return this.config.get<string>('permissionMode', 'ask') === 'auto' ? 'auto' : 'ask';
-  }
-
-  getFileWritePermission(): 'auto' | 'ask' {
-    return this.config.get<string>('fileWritePermission', 'ask') === 'auto' ? 'auto' : 'ask';
   }
 
   getTerminalAutoApprove(): boolean {
@@ -209,7 +209,6 @@ export class ConfigManager {
       proxy: this.getProxy(),
       ...this.getInferenceParams(),
       permissionMode: this.getPermissionMode(),
-      fileWritePermission: this.getFileWritePermission(),
       terminalAutoApprove: this.getTerminalAutoApprove(),
       highRiskCommands: this.getHighRiskCommandsEnabled(),
       maxToolIterations: this.getMaxToolIterations(),
@@ -237,7 +236,6 @@ export class ConfigManager {
       maxTokens: 'maxTokens',
       frequencyPenalty: 'frequencyPenalty',
       permissionMode: 'permissionMode',
-      fileWritePermission: 'fileWritePermission',
       terminalAutoApprove: 'terminalAutoApprove',
       highRiskCommands: 'highRiskCommands',
       maxToolIterations: 'maxToolIterations',

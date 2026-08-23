@@ -591,6 +591,7 @@ export class AgentEngine {
         audit: this.deps.audit,
         requestPermission: cb.requestPermission,
         sessionId,
+        mode,
         onCommandOutput: (cmd, chunk) => {
           cb.onCommandOutput(cmd, chunk);
           onLiveOutput?.(chunk);

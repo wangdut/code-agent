@@ -207,9 +207,11 @@ export interface SettingsSnapshot {
   topP: number;
   maxTokens: number;
   frequencyPenalty: number;
-  /** 权限模式：ask 询问模式 / auto 全自动模式（仅作用于智能体模式下工作区内文件的修改/编辑/新增/删除；工作区外文件任何模式只读） */
+  /**
+   * 权限管理（仅智能体模式下生效）：ask 询问模式 / auto 全自动模式
+   * 第一层「运行模式」决定工具集边界；第二层「权限管理」仅控制智能体模式下工作区内文件写入的确认机制，对话模式下不生效
+   */
   permissionMode: 'ask' | 'auto';
-  fileWritePermission: 'auto' | 'ask';
   terminalAutoApprove: boolean;
   highRiskCommands: boolean;
   /** 单轮任务最大工具调用轮次（1-1000，默认 20） */
