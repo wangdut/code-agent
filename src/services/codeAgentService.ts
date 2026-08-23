@@ -17,7 +17,7 @@ import { SessionManager } from '../sessions/sessionManager';
 import { UsageTracker } from '../sessions/usageTracker';
 import { ContextManager } from '../context/contextManager';
 import { ToolRegistry } from '../tools/toolRegistry';
-import { AdapterRegistry } from '../models/modelAdapter';
+import { AdapterRegistry, isKnownVisionModel } from '../models/modelAdapter';
 import { AgentEngine, SYSTEM_PROMPT as ENGINE_SYSTEM_PROMPT } from '../agent/agentEngine';
 import { estimateTokens } from '../context/tokenCounter';
 import { EditorDiffDecorator } from '../editor/editorDiffDecorator';
@@ -1194,7 +1194,9 @@ export class CodeAgentService {
       controller.post({ type: 'chat:error', sessionId: '', messageId: '', error: `模型 ${model.id} 已存在` });
       return;
     }
-    models.push(model);
+    // 多模态默认校准：手动添加且能力标识未设置时，命中已知视觉模型 ID 模式自动勾选（与动态拉取探测同口径）；用户显式勾选/取消原样尊重
+    const withMultimodal = model.multimodal === undefined && isKnownVisionModel(model.id) ? { ...model, multimodal: true } : model;
+    models.push(withMultimodal);
     await this.config.setModels(models);
     await this.sendSettings(controller);
     this.broadcastSettings();

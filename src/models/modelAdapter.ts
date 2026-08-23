@@ -201,7 +201,7 @@ function rateLimitWaitSeconds(errMsg: string): number {
  * 已知视觉模型 ID 模式（策划式保守匹配，厂商无关兜底）：
  * 多家服务商（月之暗面/智谱/通义/豆包/OpenAI/Anthropic）官方文档声明视觉模型，
  * 但 /models 接口不返回能力元数据，四路元数据探测全落空时按 ID 模式兜底识别；不命中一律视为不支持（保守，宁漏勿错）。
- * 覆盖（均依官方文档）：通用含 vision 的 ID（doubao-vision-*、gpt-4-vision-preview、moonshot-v1-*-vision-preview）；
+ * 覆盖（均依官方文档）：通用含 vision 的 ID（doubao-vision-*、gpt-4-vision-preview、moonshot-v1-*-vision-preview、DeepSeek 视觉系 deepseek-*-vision-* 等）；
  * 月之暗面 kimi-k3/kimi-k2.5+/kimi-latest；智谱 GLM-4V/GLM-4.xV 系；通义 qwen-vl/qwen2.x-vl/QVQ 系；
  * OpenAI gpt-4o/gpt-4.1/gpt-4-turbo/gpt-5/o3(非 mini)/o4 系；Anthropic Claude 3+/Claude *-4 系。
  * 明确排除（纯文本，不命中）：kimi-k2 基础系、glm-4/glm-4.5 文本系、qwen-plus/max/turbo、
@@ -220,6 +220,11 @@ const KNOWN_VISION_ID_RE = new RegExp(
   ].join('|'),
   'i'
 );
+
+/** 已知视觉模型 ID 模式命中判定（导出：服务层手动添加模型默认多模态校准、单元可测） */
+export function isKnownVisionModel(id: string): boolean {
+  return KNOWN_VISION_ID_RE.test(id);
+}
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 

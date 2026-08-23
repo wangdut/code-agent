@@ -536,8 +536,8 @@ function ModelEditor({ model, onSave, onCancel }: { model: ModelMeta; onSave: (m
           <div className="param-warning">⚠ 单次输出上限不能超过上下文窗口大小，请修正后再保存</div>
         )}
         <Field
-          label="多模态能力（V1.4.0）"
-          hint="图片输入支持标识：预置模型已按官方能力标记；动态拉取的模型默认不支持，若该模型支持图片理解（如 GPT-4o、Kimi 视觉模型等）请勾选；向未勾选的模型发送图片会在发送前拦截并提示"
+          label="多模态能力"
+          hint="图片输入支持标识：预置官方视觉模型与动态探测命中的视觉模型（GPT-4o、Kimi K3、DeepSeek V4 Flash Vision Exp、GLM-4V、Qwen-VL 等）默认勾选；未自动识别的模型若支持图片理解可手动勾选，校准值重新拉取时保留；向未勾选的模型发送图片会在发送前拦截并提示"
         >
           <Checkbox label="支持图片输入（多模态模型）" checked={!!m.multimodal} onChange={v => setM({ ...m, multimodal: v })} />
         </Field>

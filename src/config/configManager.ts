@@ -49,7 +49,8 @@ export const PRESET_PROVIDER_CATALOG: PresetProviderCatalogItem[] = [
     baseUrl: 'https://api.deepseek.com',
     fallbackModels: [
       { id: 'deepseek-chat', name: 'DeepSeek Chat（通用对话）', contextWindow: 65536, maxOutputTokens: 8192 },
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner（深度推理）', contextWindow: 65536, maxOutputTokens: 8192 }
+      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner（深度推理）', contextWindow: 65536, maxOutputTokens: 8192 },
+      { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp（视觉）', contextWindow: 1000000, maxOutputTokens: 8192, multimodal: true }
     ]
   },
   {
@@ -321,6 +322,9 @@ export class ConfigManager {
         contextWindow: typeof m.contextWindow === 'number' && m.contextWindow > 0 ? m.contextWindow : DEFAULT_CONTEXT_WINDOW,
         maxOutputTokens: typeof m.maxOutputTokens === 'number' && m.maxOutputTokens > 0 ? m.maxOutputTokens : DEFAULT_MAX_OUTPUT_TOKENS,
         pricing: m.pricing || '按量计费',
+        // 多模态标识透传（V1.4.0 缺陷修复）：预置标记/拉取探测/手动校准的布尔值原样保留，
+        // 显式 false 视为用户校准（重拉取时优先保留），缺省/非法值视为不支持；遗漏该字段会导致校验层恒判「不支持图片输入」
+        multimodal: typeof m.multimodal === 'boolean' ? m.multimodal : undefined,
         providerId: m.providerId ?? PRESET_PROVIDER_ID
       }));
   }
