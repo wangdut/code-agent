@@ -1,12 +1,19 @@
 /**
  * 输入区组件
  * - 多行输入框：Enter 发送 / Shift+Enter 换行
- * - @ 触发文件联想选择器（引用工作区文件/文件夹）
+ * - @ 触发文件联想选择器（引用工作区文件/文件夹；图片文件纳入多模态输入链路，V1.4.0）
+ * - 多模态图片输入（V1.4.0）：剪贴板粘贴 / 文件拖拽 / @ 引用三路径，缩略图内联预览与单独删除、批量清空
  * - 底部常驻操作栏：模型切换下拉框 + 模式切换下拉框 + 发送/停止按钮
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AttachedFileRef, ModelMeta, ProviderInfo, RunMode } from '../../src/types';
+import { AttachedFileRef, ImageRef, IMAGE_MAX_SIZE, IMAGE_SUPPORTED_TYPES, ModelMeta, ProviderInfo, RunMode } from '../../src/types';
 import { post } from '../vscode';
+
+/** 图片文件扩展名识别（@ 引用路径：命中后经扩展侧读取为 Base64 纳入多模态链路） */
+const IMAGE_EXT_RE = /\.(png|jpe?g|webp)$/i;
+
+/** 单条消息图片数量上限（与附件链路的限额策略对齐，防止超大请求体与内存压力） */
+const MAX_IMAGE_COUNT = 10;
 
 interface Props {
   models: ModelMeta[];
@@ -24,13 +31,17 @@ interface Props {
   onModelChange: (id: string) => void;
   onModeChange: (m: RunMode) => void;
   onPermissionModeChange: (m: 'ask' | 'auto') => void;
-  onSend: (text: string, attachments: AttachedFileRef[]) => void;
+  onSend: (text: string, attachments: AttachedFileRef[], images: ImageRef[]) => boolean;
   onStop: () => void;
 }
 
 export function InputArea(props: Props): React.ReactElement {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<AttachedFileRef[]>([]);
+  /** 多模态图片列表（V1.4.0：粘贴/拖拽/@ 引用统一入口，Base64 Data URL 承载） */
+  const [images, setImages] = useState<ImageRef[]>([]);
+  /** 图片插入失败的轻量提示（格式/大小校验等，5s 自动消失） */
+  const [imageTip, setImageTip] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQuery, setPickerQuery] = useState('');
   const [pickerItems, setPickerItems] = useState<string[]>([]);
@@ -57,7 +68,7 @@ export function InputArea(props: Props): React.ReactElement {
     textareaRef.current?.focus();
   }, [props.injectRefs]);
 
-  // @ 联想：监听扩展返回的文件列表
+  // @ 联想与图片读取结果：监听扩展返回的消息
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       const msg = e.data;
@@ -65,10 +76,75 @@ export function InputArea(props: Props): React.ReactElement {
         setPickerItems(msg.paths ?? []);
         setPickerLoading(false);
       }
+      if (msg?.type === 'image:loaded') {
+        if (msg.error) {
+          setImageTip(msg.error);
+        } else if (msg.dataUrl && msg.mimeType) {
+          pushImage({ name: msg.name ?? 'image', mimeType: msg.mimeType, dataUrl: msg.dataUrl });
+        }
+      }
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
   }, []);
+
+  // 图片提示自动消失
+  useEffect(() => {
+    if (!imageTip) {
+      return;
+    }
+    const t = setTimeout(() => setImageTip(''), 5000);
+    return () => clearTimeout(t);
+  }, [imageTip]);
+
+  /** 插入图片（同一 Data URL 去重；数量上限护栏，避免超大请求体） */
+  const pushImage = (img: ImageRef) => {
+    setImages(prev => {
+      if (prev.some(p => p.dataUrl === img.dataUrl)) {
+        return prev;
+      }
+      if (prev.length >= MAX_IMAGE_COUNT) {
+        setImageTip(`单条消息最多插入 ${MAX_IMAGE_COUNT} 张图片，请删除部分后再试`);
+        return prev;
+      }
+      return [...prev, img];
+    });
+  };
+
+  /** 粘贴/拖拽路径的图片文件校验与读取（格式 PNG/JPG/JPEG/WebP、单张 ≤10MB） */
+  const addImageBlob = (file: File) => {
+    if (!IMAGE_SUPPORTED_TYPES.includes(file.type)) {
+      setImageTip('不支持的图片格式：仅支持 PNG / JPG / JPEG / WebP，请转换格式后重试');
+      return;
+    }
+    if (file.size > IMAGE_MAX_SIZE) {
+      setImageTip(`图片大小 ${(file.size / 1024 / 1024).toFixed(1)}MB 超过 10MB 上限，请压缩后再上传`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => pushImage({ name: file.name || 'image.png', mimeType: file.type, dataUrl: String(reader.result) });
+    reader.readAsDataURL(file);
+  };
+
+  // 剪贴板粘贴图片（文本粘贴不受影响，保持默认行为）
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const imgFiles = Array.from(e.clipboardData?.files ?? []).filter(f => f.type.startsWith('image/'));
+    if (imgFiles.length === 0) {
+      return;
+    }
+    e.preventDefault();
+    imgFiles.forEach(addImageBlob);
+  };
+
+  // 文件拖拽图片（非图片文件不拦截默认行为）
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    const imgFiles = Array.from(e.dataTransfer?.files ?? []).filter(f => f.type.startsWith('image/') || IMAGE_EXT_RE.test(f.name));
+    if (imgFiles.length === 0) {
+      return;
+    }
+    e.preventDefault();
+    imgFiles.forEach(addImageBlob);
+  };
 
   // 输入变化：检测 @ 触发
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -116,7 +192,11 @@ export function InputArea(props: Props): React.ReactElement {
   // 选择文件
   const pickFile = (path: string) => {
     const isFolder = path.endsWith('/');
-    if (isFolder) {
+    const isImage = !isFolder && IMAGE_EXT_RE.test(path);
+    if (isImage) {
+      // @ 引用图片文件（V1.4.0）：经扩展侧读取为 Base64（含格式/大小前置校验），统一纳入多模态输入链路
+      post({ type: 'image:load', path });
+    } else if (isFolder) {
       // 文件夹引用：去掉尾斜杠
       const folderPath = path.replace(/\/$/, '');
       setAttachments(prev => [...prev.filter(a => a.path !== folderPath), { path: folderPath, kind: 'folder' }]);
@@ -142,15 +222,19 @@ export function InputArea(props: Props): React.ReactElement {
 
   const send = () => {
     const t = text.trim();
-    if (!t && attachments.length === 0) {
+    if (!t && attachments.length === 0 && images.length === 0) {
       return;
     }
     if (props.generating || props.disabled) {
       return;
     }
-    props.onSend(t, attachments);
+    // onSend 返回 false 表示发送被拦截（如模型不支持多模态）：保留文本/附件/图片供用户调整后重试
+    if (!props.onSend(t, attachments, images)) {
+      return;
+    }
     setText('');
     setAttachments([]);
+    setImages([]);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -199,14 +283,30 @@ export function InputArea(props: Props): React.ReactElement {
           })}
         </div>
       )}
-      <div className="input-box-wrap">
+      {/* 多模态图片预览区（V1.4.0）：缩略图内联展示、单独删除与批量清空，不影响已输入文本 */}
+      {images.length > 0 && (
+        <div className="attachment-chips input-chips image-chips">
+          {images.map((img, i) => (
+            <span key={`${img.name}-${i}`} className="image-chip" title={img.name}>
+              <img src={img.dataUrl} alt={img.name} />
+              <button className="chip-remove" onClick={() => setImages(prev => prev.filter((_, j) => j !== i))}>×</button>
+            </span>
+          ))}
+          <button className="image-clear-all" onClick={() => setImages([])} title="清空全部图片（不影响文本与文件引用）">
+            清空图片
+          </button>
+        </div>
+      )}
+      {imageTip && <div className="image-tip">{imageTip}</div>}
+      <div className="input-box-wrap" onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
         <textarea
           ref={textareaRef}
           className="input-textarea"
-          placeholder="输入消息，Enter 发送，Shift+Enter 换行，@ 引用文件"
+          placeholder="输入消息，Enter 发送，Shift+Enter 换行，@ 引用文件；可粘贴/拖拽图片（多模态模型）"
           value={text}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           rows={Math.min(8, Math.max(2, text.split('\n').length))}
           disabled={props.disabled}
         />
@@ -290,7 +390,7 @@ export function InputArea(props: Props): React.ReactElement {
             ■ 停止
           </button>
         ) : (
-          <button className="send-btn" onClick={send} disabled={props.disabled || (!text.trim() && attachments.length === 0)} title="发送 (Enter)">
+          <button className="send-btn" onClick={send} disabled={props.disabled || (!text.trim() && attachments.length === 0 && images.length === 0)} title="发送 (Enter)">
             发送 ➤
           </button>
         )}

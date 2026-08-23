@@ -4,12 +4,14 @@
  */
 import * as http from 'http';
 import * as https from 'https';
-import { TokenUsage } from '../types';
+import { ImageRef, TokenUsage } from '../types';
 
 /** 模型消息（OpenAI 格式） */
 export interface ModelMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
+  /** user 消息携带的图片（V1.4.0 多模态）：由适配器统一层组装为 image_url 内容块，其余角色不应携带 */
+  images?: ImageRef[];
   name?: string;
   tool_call_id?: string;
   tool_calls?: Array<{
@@ -71,8 +73,8 @@ export interface ModelAdapter {
   chat(opts: ChatRequestOptions): Promise<{ content: string; usage: TokenUsage }>;
   /** 查询账户余额（部分服务商支持） */
   queryBalance(): Promise<string>;
-  /** 拉取服务商模型列表（OpenAI 兼容 /models 接口，部分服务商可能不支持） */
-  listModels?(): Promise<Array<{ id: string; contextWindow?: number; maxOutputTokens?: number }>>;
+  /** 拉取服务商模型列表（OpenAI 兼容 /models 接口，部分服务商可能不支持；返回项含多模态能力探测结果） */
+  listModels?(): Promise<Array<{ id: string; contextWindow?: number; maxOutputTokens?: number; multimodal?: boolean }>>;
 }
 
 function getAgent(proxy: string | undefined): { httpAgent?: http.Agent; httpsAgent?: https.Agent } {
@@ -198,6 +200,32 @@ function rateLimitWaitSeconds(errMsg: string): number {
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 /**
+ * 多模态协议组装（V1.4.0，适配器统一层，厂商无关）：
+ * 携带图片的 user 消息转为 OpenAI 兼容协议 content 数组（text + image_url 内容块按顺序组合）；
+ * 本地图片以 Base64 Data URL 直接嵌入，无需图床。
+ * 零负优化约定：纯文本消息不经任何变换（请求体与历史版本逐字节一致）
+ */
+function toWireMessage(m: ModelMessage): Record<string, unknown> {
+  if (m.role === 'user' && m.images && m.images.length > 0) {
+    const blocks: Array<Record<string, unknown>> = [];
+    const text = typeof m.content === 'string' ? m.content.trim() : '';
+    // 部分服务商要求 content 数组至少含一个 text 块，纯图片输入时补默认指令
+    blocks.push({ type: 'text', text: text || '请查看图片并结合图片内容回答。' });
+    for (const img of m.images) {
+      blocks.push({ type: 'image_url', image_url: { url: img.dataUrl } });
+    }
+    return { role: m.role, content: blocks };
+  }
+  if (m.images) {
+    // 防御性剥离：非 user 消息理论上不携带图片，避免图片字段进入请求体
+    const { images, ...rest } = m;
+    return rest;
+  }
+  // 纯文本消息：展开为普通对象（JSON 序列化结果与历史版本逐字节一致，零负优化）
+  return { ...m };
+}
+
+/**
  * OpenAI 协议适配器
  * 兼容 DeepSeek 及所有 OpenAI 协议兼容服务
  */
@@ -221,7 +249,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   async streamChat(opts: ChatRequestOptions, callbacks: StreamCallbacks): Promise<void> {
     const body: Record<string, unknown> = {
       model: opts.model,
-      messages: opts.messages,
+      messages: opts.messages.map(toWireMessage),
       stream: true,
       stream_options: { include_usage: true }
     };
@@ -398,7 +426,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   async chat(opts: ChatRequestOptions): Promise<{ content: string; usage: TokenUsage }> {
     const body: Record<string, unknown> = {
       model: opts.model,
-      messages: opts.messages,
+      messages: opts.messages.map(toWireMessage),
       stream: false
     };
     if (opts.temperature !== undefined) body.temperature = opts.temperature;
@@ -523,13 +551,13 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     if (!items) {
       throw new Error('模型列表拉取失败：接口响应格式不支持（缺少 data / models 字段）');
     }
-    const out: Array<{ id: string; contextWindow?: number; maxOutputTokens?: number }> = [];
+    const out: Array<{ id: string; contextWindow?: number; maxOutputTokens?: number; multimodal?: boolean }> = [];
     for (const it of items) {
       const id = typeof it?.id === 'string' && it.id ? it.id : typeof it?.name === 'string' && it.name ? it.name : '';
       if (!id) {
         continue;
       }
-      const entry: { id: string; contextWindow?: number; maxOutputTokens?: number } = { id };
+      const entry: { id: string; contextWindow?: number; maxOutputTokens?: number; multimodal?: boolean } = { id };
       const cw = it?.context_length ?? it?.contextWindow ?? it?.max_input_tokens;
       const mo = it?.max_output_tokens ?? it?.maxOutputTokens;
       if (typeof cw === 'number' && cw > 0) {
@@ -537,6 +565,15 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       }
       if (typeof mo === 'number' && mo > 0) {
         entry.maxOutputTokens = mo;
+      }
+      // 多模态能力探测（厂商无关，尽力而为）：capabilities 含 vision / modalities 含 image / 显式布尔字段
+      if (
+        (Array.isArray(it?.capabilities) && it.capabilities.some((c: unknown) => String(c).toLowerCase().includes('vision'))) ||
+        (Array.isArray(it?.modalities) && it.modalities.some((x: unknown) => /image/.test(String(x).toLowerCase()))) ||
+        it?.supports_vision === true ||
+        it?.vision === true
+      ) {
+        entry.multimodal = true;
       }
       out.push(entry);
     }

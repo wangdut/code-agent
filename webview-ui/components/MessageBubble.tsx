@@ -77,9 +77,19 @@ export const MessageBubble = React.memo(
               ))}
             </div>
           )}
-          <div className="bubble user-bubble">
-            <Markdown content={displayContent} />
-          </div>
+          {/* 多模态图片（V1.4.0）：用户消息携带的图片随历史会话回显 */}
+          {message.images && message.images.length > 0 && (
+            <div className="msg-images">
+              {message.images.map((img, i) => (
+                <img key={i} src={img.dataUrl} alt={img.name} title={img.name} />
+              ))}
+            </div>
+          )}
+          {message.content && (
+            <div className="bubble user-bubble">
+              <Markdown content={displayContent} />
+            </div>
+          )}
           {expandTextBtn}
         </div>
       </div>

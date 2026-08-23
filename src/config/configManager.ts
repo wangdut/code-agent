@@ -14,7 +14,7 @@ const API_KEY_SECRET = 'codeAgent.apiKey';
 /** 预置服务商 id（DeepSeek，开箱即用） */
 export const PRESET_PROVIDER_ID = 'deepseek';
 
-/** 模型元数据全局默认兑底（V1.1.0）：总上下文窗口 300k / 单轮最大输出 100k */
+/** 模型元数据全局默认兜底（V1.1.0）：总上下文窗口 300k / 单轮最大输出 100k */
 export const DEFAULT_CONTEXT_WINDOW = 300000;
 export const DEFAULT_MAX_OUTPUT_TOKENS = 100000;
 
@@ -38,7 +38,8 @@ export interface PresetProviderCatalogItem {
   baseUrl: string;
   /** 兼容性备注（非 OpenAI 兼容协议等需用户知悉的限制） */
   note?: string;
-  fallbackModels: Array<{ id: string; name: string; contextWindow: number; maxOutputTokens: number }>;
+  /** 兜底模型列表（multimodal 按官方能力准确标记，缺省视为不支持多模态） */
+  fallbackModels: Array<{ id: string; name: string; contextWindow: number; maxOutputTokens: number; multimodal?: boolean }>;
 }
 
 export const PRESET_PROVIDER_CATALOG: PresetProviderCatalogItem[] = [
@@ -95,8 +96,8 @@ export const PRESET_PROVIDER_CATALOG: PresetProviderCatalogItem[] = [
     name: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1',
     fallbackModels: [
-      { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, maxOutputTokens: 16384 },
-      { id: 'gpt-4o-mini', name: 'GPT-4o mini', contextWindow: 128000, maxOutputTokens: 16384 },
+      { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, maxOutputTokens: 16384, multimodal: true },
+      { id: 'gpt-4o-mini', name: 'GPT-4o mini', contextWindow: 128000, maxOutputTokens: 16384, multimodal: true },
       { id: 'o3-mini', name: 'OpenAI o3-mini（推理）', contextWindow: 200000, maxOutputTokens: 100000 }
     ]
   },
@@ -106,8 +107,8 @@ export const PRESET_PROVIDER_CATALOG: PresetProviderCatalogItem[] = [
     baseUrl: 'https://api.anthropic.com',
     note: '官方原生接口为 Anthropic 自有协议（非 OpenAI 兼容），直接以官方地址接入可能无法调用；如需接入请将 Base URL 改为 OpenAI 兼容网关地址',
     fallbackModels: [
-      { id: 'claude-3-5-sonnet-latest', name: 'Claude 3.5 Sonnet', contextWindow: 200000, maxOutputTokens: 8192 },
-      { id: 'claude-3-opus-latest', name: 'Claude 3 Opus', contextWindow: 200000, maxOutputTokens: 4096 }
+      { id: 'claude-3-5-sonnet-latest', name: 'Claude 3.5 Sonnet', contextWindow: 200000, maxOutputTokens: 8192, multimodal: true },
+      { id: 'claude-3-opus-latest', name: 'Claude 3 Opus', contextWindow: 200000, maxOutputTokens: 4096, multimodal: true }
     ]
   }
 ];
@@ -335,8 +336,9 @@ export class ConfigManager {
     const cached = this.getModels().filter(m => m.providerId === providerId);
     const merged = fetched.map(f => {
       const prev = cached.find(c => c.id === f.id);
+      // multimodal：用户手动校准过的值（prev 非缺省）优先保留，否则采用本次拉取的能力信息
       return prev
-        ? { ...f, name: prev.name, contextWindow: prev.contextWindow, maxOutputTokens: prev.maxOutputTokens, pricing: prev.pricing }
+        ? { ...f, name: prev.name, contextWindow: prev.contextWindow, maxOutputTokens: prev.maxOutputTokens, pricing: prev.pricing, multimodal: prev.multimodal ?? f.multimodal }
         : f;
     });
     const others = this.getModels().filter(m => m.providerId !== providerId);
@@ -363,6 +365,7 @@ export class ConfigManager {
       contextWindow: m.contextWindow,
       maxOutputTokens: m.maxOutputTokens,
       pricing: '按量计费',
+      multimodal: m.multimodal,
       providerId
     }));
   }

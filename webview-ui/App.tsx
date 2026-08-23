@@ -5,7 +5,7 @@
  */
 import React, { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  AgentStep, AttachedFileRef, ChatMessage, CompressRecord, ExtensionToWebviewMessage,
+  AgentStep, AttachedFileRef, ChatMessage, CompressRecord, ExtensionToWebviewMessage, ImageRef,
   PermissionRequest, RunMode, Session, SessionContextStats, SessionListItem, SettingsSnapshot
 } from '../src/types';
 import { post, vscodeApi } from './vscode';
@@ -376,22 +376,33 @@ export function App(): React.ReactElement {
 
   // ---------- 操作 ----------
 
-  const send = (text: string, attachments: AttachedFileRef[]) => {
+  const send = (text: string, attachments: AttachedFileRef[], images: ImageRef[]): boolean => {
     if (!activeSession || !settings) {
       setErrorToast('请先配置模型（点击右上角设置按钮）');
-      return;
+      return false;
     }
     if (!settings.apiKeyConfigured) {
       setErrorToast('未配置 API Key，请点击右上角设置按钮填写');
       setShowSettings(true);
-      return;
+      return false;
     }
-    // 本地即时显示用户消息
+    // V1.4.0 多模态前端预校验（与扩展侧同口径，扩展侧保留最终防线）：
+    // 拦截时返回 false 使输入区保留文本/附件/图片，用户切换多模态模型后可直接重试，不丢失已插入的图片
+    const sendModelId = activeSession.modelId || settings.defaultModel;
+    if (images.length > 0) {
+      const sendModel = settings.models.find(m => m.id === sendModelId);
+      if (!sendModel?.multimodal) {
+        setErrorToast(`当前模型「${sendModel?.name ?? sendModelId}」不支持图片输入，请更换支持多模态的模型后重试`);
+        return false;
+      }
+    }
+    // 本地即时显示用户消息（含多模态图片，V1.4.0）
     const userMsg: ChatMessage = {
       id: `local-${Date.now()}`,
       role: 'user',
       content: text,
       attachments: attachments.length > 0 ? attachments : undefined,
+      images: images.length > 0 ? images : undefined,
       createdAt: Date.now()
     };
     setActiveSession(prev => (prev ? { ...prev, messages: [...prev.messages, userMsg] } : prev));
@@ -400,9 +411,11 @@ export function App(): React.ReactElement {
       sessionId: activeSession.id,
       text,
       attachments,
-      modelId: activeSession.modelId || settings.defaultModel,
+      images: images.length > 0 ? images : undefined,
+      modelId: sendModelId,
       mode: activeSession.mode || settings.defaultMode
     });
+    return true;
   };
 
   const selectSession = (id: string) => {

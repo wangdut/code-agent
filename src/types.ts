@@ -17,6 +17,27 @@ export interface ModelMeta {
   pricing: string;
   /** 所属服务商 id（V1.1.0 多模型体系；旧缓存模型缺省时归属预置服务商） */
   providerId?: string;
+  /**
+   * 多模态（图片输入）支持标识（V1.4.0）：预置模型按官方能力标记；动态拉取模型若接口返回能力信息则同步，
+   * 未返回默认不支持；可在模型元数据校准弹层手动调整。缺省/false 视为不支持
+   */
+  multimodal?: boolean;
+}
+
+/** 单张图片大小上限（V1.4.0 多模态输入：10MB，超出提示压缩后再上传，避免请求体过大） */
+export const IMAGE_MAX_SIZE = 10 * 1024 * 1024;
+
+/** 支持的图片 MIME 类型（PNG / JPG / JPEG / WebP 主流格式） */
+export const IMAGE_SUPPORTED_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+
+/** 图片附件（V1.4.0 多模态输入）：本地图片统一以 Base64 Data URL 承载，适配器层组装为 image_url 内容块 */
+export interface ImageRef {
+  /** 文件名（展示用） */
+  name: string;
+  /** MIME 类型（image/png | image/jpeg | image/webp） */
+  mimeType: string;
+  /** Base64 Data URL（data:<mime>;base64,<data>） */
+  dataUrl: string;
 }
 
 /**
@@ -139,6 +160,8 @@ export interface ChatMessage {
   segments?: MessageSegment[];
   /** 消息附件引用 */
   attachments?: AttachedFileRef[];
+  /** 消息携带的图片（V1.4.0 多模态输入；仅 user 消息，随会话持久化供续接与重新生成复用） */
+  images?: ImageRef[];
   tokenUsage?: TokenUsage;
   modelId?: string;
   createdAt: number;
@@ -274,7 +297,8 @@ export interface SessionContextStats {
 /** WebView -> 扩展 消息协议 */
 export type WebviewToExtensionMessage =
   | { type: 'ready' }
-  | { type: 'chat:send'; sessionId: string; text: string; attachments: AttachedFileRef[]; modelId: string; mode: RunMode }
+  | { type: 'chat:send'; sessionId: string; text: string; attachments: AttachedFileRef[]; images?: ImageRef[]; modelId: string; mode: RunMode }
+  | { type: 'image:load'; path: string }
   | { type: 'chat:regenerate'; sessionId: string; messageId: string }
   | { type: 'chat:stop'; sessionId: string }
   | { type: 'chat:compress'; sessionId: string }
@@ -323,6 +347,8 @@ export type ExtensionToWebviewMessage =
   | { type: 'permission:request'; request: PermissionRequest }
   | { type: 'stats:update'; stats: SessionContextStats }
   | { type: 'files:result'; query: string; paths: string[] }
+  /** @ 引用图片文件的 Base64 读取结果（V1.4.0 多模态输入；error 非空表示格式/大小校验失败或读取异常） */
+  | { type: 'image:loaded'; path: string; name?: string; mimeType?: string; dataUrl?: string; error?: string }
   | { type: 'usage:result'; usage: { today: DailyUsage | null; balance?: string; balanceError?: string } }
   | { type: 'compressed'; sessionId: string; record: CompressRecord }
   | { type: 'editor:inject'; refs: AttachedFileRef[] };

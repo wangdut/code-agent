@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {
-  AttachedFileRef, ChatMessage, DailyUsage, ExtensionToWebviewMessage, ModelMeta,
+  AttachedFileRef, ChatMessage, DailyUsage, ExtensionToWebviewMessage, ImageRef, IMAGE_MAX_SIZE, ModelMeta,
   PermissionRequest, ProviderInfo, RunMode, Session, SessionContextStats, SessionListItem
 } from '../types';
 import { ConfigManager, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS, PRESET_PROVIDER_CATALOG, PRESET_PROVIDER_ID } from '../config/configManager';
@@ -28,6 +28,9 @@ const MAX_ATTACH_FILE_SIZE = 50 * 1024; // 单个引用文件 50KB
 const MAX_ATTACH_TOTAL_SIZE = 200 * 1024; // 引用总大小 200KB
 const MAX_ATTACH_FILES = 30;
 const PERMISSION_TIMEOUT = 10 * 60 * 1000; // 权限确认超时 10 分钟
+
+/** 图片扩展名 → MIME 映射（V1.4.0 多模态输入：@ 引用图片文件的格式判定基准） */
+const IMAGE_EXT_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
 
 interface PendingPermission {
   resolve: (approved: boolean) => void;
@@ -441,6 +444,58 @@ export class CodeAgentService {
     return result;
   }
 
+  /**
+   * 读取本地图片文件为 Base64 Data URL（V1.4.0 多模态输入，@ 文件引用路径）：
+   * 格式（PNG/JPG/JPEG/WebP）与大小（≤10MB）在扩展侧统一前置校验，失败返回明确原因供前端提示
+   */
+  async readImageFile(relPath: string): Promise<{ name: string; mimeType: string; dataUrl: string } | { error: string }> {
+    const wsFolders = vscode.workspace.workspaceFolders;
+    // 无工作区场景（审查加固）：未打开文件夹时直接拒绝引用类读取，避免退化为任意路径直读
+    if (!wsFolders || wsFolders.length === 0) {
+      return { error: '当前未打开工作区文件夹，无法引用本地图片文件' };
+    }
+    const wsRoot = wsFolders[0].uri.fsPath;
+    const absPath = path.isAbsolute(relPath) ? relPath : path.join(wsRoot, relPath);
+    // 工作区路径收敛：消息通道输入不视为可信，拒绝越界（../ 逃逸）读取工作区外图片；
+    // 多根工作区对任一根通过即放行（审查加固），避免第 2/3 个文件夹内图片被误拒
+    const within = (base: string, target: string): boolean => {
+      const rel = path.relative(base, target);
+      return !rel.startsWith('..') && !path.isAbsolute(rel);
+    };
+    const resolved = path.resolve(absPath);
+    if (!wsFolders.some(f => within(f.uri.fsPath, resolved))) {
+      return { error: `图片不在当前工作区内，仅支持引用工作区内的图片文件: ${relPath}` };
+    }
+    try {
+      if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
+        return { error: `图片文件不存在: ${relPath}` };
+      }
+      // 符号链接复核（审查加固）：收敛判定为词法计算而 stat/read 跟随链接，
+      // 需以真实路径复核，防止工作区内植入的链接指向工作区外图片
+      const real = fs.realpathSync(resolved);
+      if (!wsFolders.some(f => {
+        let realRoot = f.uri.fsPath;
+        try { realRoot = fs.realpathSync(f.uri.fsPath); } catch { /* 根目录不可解析时退回词法路径 */ }
+        return within(realRoot, real);
+      })) {
+        return { error: `图片链接实际目标不在工作区内，无法引用: ${relPath}` };
+      }
+      const ext = path.extname(absPath).toLowerCase();
+      const mimeType = IMAGE_EXT_MIME[ext];
+      if (!mimeType) {
+        return { error: '不支持的图片格式：仅支持 PNG / JPG / JPEG / WebP，请转换格式后重试' };
+      }
+      const size = fs.statSync(absPath).size;
+      if (size > IMAGE_MAX_SIZE) {
+        return { error: `图片大小 ${(size / 1024 / 1024).toFixed(1)}MB 超过 10MB 上限，请压缩后再上传` };
+      }
+      const buf = fs.readFileSync(absPath);
+      return { name: path.basename(absPath), mimeType, dataUrl: `data:${mimeType};base64,${buf.toString('base64')}` };
+    } catch {
+      return { error: `图片读取失败: ${relPath}` };
+    }
+  }
+
   /** 按 include 规则遍历目录收集文件 */
   private walkForPatterns(root: string, patterns: string[], maxFiles: number): string[] {
     const out: string[] = [];
@@ -502,10 +557,11 @@ export class CodeAgentService {
     sessionId: string,
     text: string,
     attachments: AttachedFileRef[],
+    images: ImageRef[],
     modelId: string,
     mode: RunMode
   ): Promise<void> {
-    await this.startChat(controller, sessionId, text, attachments, modelId, mode, false);
+    await this.startChat(controller, sessionId, text, attachments, images, modelId, mode, false);
   }
 
   /** 重新生成：移除该助手消息及其后的工具消息，用上一条用户消息重新执行 */
@@ -550,6 +606,8 @@ export class CodeAgentService {
       sessionId,
       userText,
       userAttachments,
+      // 图片已随原用户消息持久化为 Base64，直接复用（无需重读文件），重新生成时多模态语义与首轮一致
+      userMsg.images ?? [],
       session.modelId || this.config.getDefaultModel(),
       session.mode || this.config.getDefaultMode(),
       true
@@ -561,6 +619,7 @@ export class CodeAgentService {
     sessionId: string,
     text: string,
     attachments: AttachedFileRef[],
+    images: ImageRef[],
     modelId: string,
     mode: RunMode,
     skipUserAppend: boolean
@@ -575,8 +634,17 @@ export class CodeAgentService {
       return;
     }
     const trimmed = text.trim();
-    if (!trimmed && attachments.length === 0) {
+    if (!trimmed && attachments.length === 0 && images.length === 0) {
       return;
+    }
+    // V1.4.0 多模态前置校验：输入含图片时先校验模型能力，不支持则拦截请求（不产生 Token 消耗、无接口报错）；
+    // 纯文本输入不受影响，所有模型均可正常发起对话
+    if (images.length > 0) {
+      const chatModel = this.config.getModel(modelId);
+      if (!chatModel?.multimodal) {
+        controller.post({ type: 'chat:error', sessionId, messageId: '', error: `当前模型「${chatModel?.name ?? modelId}」不支持图片输入，请更换支持多模态的模型后重试` });
+        return;
+      }
     }
     // V1.3.0 密钥校验对齐服务商体系：按当前模型所属服务商实时读取 SecretStorage（无内存缓存），
     // 密钥重配置保存后即时生效；修复旧版读全局密钥导致重填密钥后仍报「未配置 API Key」的缺陷
@@ -702,6 +770,7 @@ export class CodeAgentService {
         session,
         trimmed,
         loadedAttachments,
+        images,
         modelId,
         mode,
         {
@@ -952,6 +1021,8 @@ export class CodeAgentService {
         contextWindow: it.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
         maxOutputTokens: it.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
         pricing: '按量计费',
+        // 多模态能力：接口返回能力信息则同步；未返回默认不支持（用户可在模型校准弹层手动开启）
+        multimodal: it.multimodal,
         providerId
       }));
     } catch (err) {

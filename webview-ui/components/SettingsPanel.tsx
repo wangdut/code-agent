@@ -535,6 +535,12 @@ function ModelEditor({ model, onSave, onCancel }: { model: ModelMeta; onSave: (m
         {m.maxOutputTokens > m.contextWindow && (
           <div className="param-warning">⚠ 单次输出上限不能超过上下文窗口大小，请修正后再保存</div>
         )}
+        <Field
+          label="多模态能力（V1.4.0）"
+          hint="图片输入支持标识：预置模型已按官方能力标记；动态拉取的模型默认不支持，若该模型支持图片理解（如 GPT-4o、Kimi 视觉模型等）请勾选；向未勾选的模型发送图片会在发送前拦截并提示"
+        >
+          <Checkbox label="支持图片输入（多模态模型）" checked={!!m.multimodal} onChange={v => setM({ ...m, multimodal: v })} />
+        </Field>
         <div className="permission-actions">
           <button className="btn" onClick={onCancel}>取消</button>
           <button className="btn btn-primary" disabled={!valid} onClick={() => onSave(m)}>保存</button>

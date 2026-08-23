@@ -7,7 +7,7 @@
  *   4. 引用资源层：用户 @ 引用的文件，按需加载、未持续引用自动降级
  * 自动/手动压缩：上下文达到模型窗口阈值（默认 75%）触发，差异化压缩算法
  */
-import { ChatMessage, CompressRecord, ModelMeta, RunMode, Session, SessionContextStats } from '../types';
+import { ChatMessage, CompressRecord, ImageRef, ModelMeta, RunMode, Session, SessionContextStats } from '../types';
 import { estimateTokens } from './tokenCounter';
 import { ModelAdapter, ModelMessage } from '../models/modelAdapter';
 import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS } from '../config/configManager';
@@ -105,6 +105,11 @@ export class ContextManager {
       for (const a of msg.attachments) {
         t += estimateTokens(a.content ?? '') + 16;
       }
+    }
+    // 图片启发式估算（V1.4.0 多模态）：主流服务商按分辨率计费单张约 85～1700 Token，取中位固定值；
+    // 请求后由模型侧 prompt_tokens 真实计数校准覆盖，不影响存量纯文本会话统计
+    if (msg.images && msg.images.length > 0) {
+      t += msg.images.length * 1024;
     }
     return t + 8; // 消息结构开销估算
   }
@@ -215,11 +220,13 @@ export class ContextManager {
         head = '系统: ';
         break;
     }
-    return head + m.content;
+    // 图片不进入压缩原文（视觉内容无法文本化摘要），仅标注存在性避免上下文语义断裂
+    const imageNote = m.images && m.images.length > 0 ? `\n(附带 ${m.images.length} 张图片)` : '';
+    return head + m.content + imageNote;
   }
 
-  /** 构建发送给模型的完整消息序列（系统层 + 摘要层 + 活跃层 + 引用层） */
-  buildMessages(session: Session, newUserContent: string, mode?: RunMode): ModelMessage[] {
+  /** 构建发送给模型的完整消息序列（系统层 + 摘要层 + 活跃层 + 引用层；images 为当前轮用户消息携带的图片） */
+  buildMessages(session: Session, newUserContent: string, mode?: RunMode, images?: ImageRef[]): ModelMessage[] {
     const messages: ModelMessage[] = [];
     if (this.systemPrompt) {
       // 语言自适应：按用户最近一次输入的主导语言注入动态语言约束（思考与回复跟随用户语言）
@@ -261,8 +268,8 @@ export class ContextManager {
         messages.push(this.chatMessageToModel(m));
       }
     }
-    // 引用资源层：@ 引用内容已合并进用户消息文本
-    messages.push({ role: 'user', content: newUserContent });
+    // 引用资源层：@ 引用内容已合并进用户消息文本；多模态图片随当前轮 user 消息一并下发（适配器层组装内容块）
+    messages.push({ role: 'user', content: newUserContent, images: images && images.length > 0 ? images : undefined });
     // 发送前最后一道防线：协议合法性校验与自动修正（防止 400 错误）
     return this.validateMessageChain(messages);
   }
@@ -384,6 +391,10 @@ export class ContextManager {
     }
     if (m.role === 'tool') {
       return { role: 'tool', content: m.content, tool_call_id: m.toolCallId ?? '', name: m.name };
+    }
+    // user 历史消息携带的图片随消息重发（多轮视觉追问场景，协议口径与首轮一致）
+    if (m.role === 'user' && m.images && m.images.length > 0) {
+      return { role: 'user', content: m.content, images: m.images };
     }
     return { role: m.role, content: m.content };
   }

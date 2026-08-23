@@ -6,6 +6,7 @@ scripts/**
 node_modules/**
 .code-agent/**
 *.vsix
+**/*.zip
 docs/**
 releases/**
 esbuild.js

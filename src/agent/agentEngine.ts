@@ -4,7 +4,7 @@
  * 参考 Cline 的工具调度与任务执行链路设计
  */
 import * as vscode from 'vscode';
-import { AgentStep, AttachedFileRef, ChatMessage, MessageSegment, ModelMeta, PermissionRequest, READONLY_TOOL_NAMES, RunMode, Session, ToolCall } from '../types';
+import { AgentStep, AttachedFileRef, ChatMessage, ImageRef, MessageSegment, ModelMeta, PermissionRequest, READONLY_TOOL_NAMES, RunMode, Session, ToolCall } from '../types';
 import { ConfigManager } from '../config/configManager';
 import { SecurityManager } from '../security/securityManager';
 import { AuditLogger } from '../security/auditLogger';
@@ -128,6 +128,7 @@ export class AgentEngine {
     session: Session,
     userText: string,
     attachments: AttachedFileRef[],
+    images: ImageRef[],
     modelId: string,
     mode: RunMode,
     cb: AgentRunCallbacks,
@@ -209,13 +210,14 @@ export class AgentEngine {
     };
 
     try {
-      // 1. 用户消息持久化（重新生成时跳过）
+      // 1. 用户消息持久化（重新生成时跳过；图片随消息落盘供续接与重新生成复用）
       if (!skipUserAppend) {
         const userMessage: ChatMessage = {
           id: randomId(),
           role: 'user',
           content: userText,
           attachments: attachments.length > 0 ? attachments : undefined,
+          images: images.length > 0 ? images : undefined,
           createdAt: Date.now()
         };
         this.deps.sessions.appendMessage(session, userMessage);
@@ -230,9 +232,9 @@ export class AgentEngine {
         }
       }
 
-      // 3. 构建四层上下文消息（系统层 + 摘要层 + 活跃层 + 引用层；对话模式附加能力边界约束）
+      // 3. 构建四层上下文消息（系统层 + 摘要层 + 活跃层 + 引用层；对话模式附加能力边界约束；多模态图片随当前轮用户消息下发）
       const contentWithAttachments = this.buildUserContent(userText, attachments);
-      const messages: ModelMessage[] = this.deps.context.buildMessages(session, contentWithAttachments, mode);
+      const messages: ModelMessage[] = this.deps.context.buildMessages(session, contentWithAttachments, mode, images);
 
       // 初始化移入 try：异常时 finally 仍会清理 runs，避免会话被永久判定为运行中
       const adapter = await this.deps.getAdapter(modelId);

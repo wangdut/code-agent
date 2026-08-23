@@ -76,8 +76,14 @@ export class WebviewController {
           }
           break;
         case 'chat:send':
-          await this.service.handleChatSend(this, msg.sessionId, msg.text, msg.attachments, msg.modelId, msg.mode);
+          await this.service.handleChatSend(this, msg.sessionId, msg.text, msg.attachments, msg.images ?? [], msg.modelId, msg.mode);
           break;
+        case 'image:load': {
+          // V1.4.0 @ 引用图片文件：扩展侧读取为 Base64（含格式/大小前置校验），结果回传前端统一纳入多模态输入链路
+          const result = await this.service.readImageFile(msg.path);
+          this.post({ type: 'image:loaded', path: msg.path, ...result });
+          break;
+        }
         case 'chat:regenerate':
           await this.service.handleChatRegenerate(this, msg.sessionId, msg.messageId);
           break;

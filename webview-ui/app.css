@@ -600,6 +600,84 @@ button {
   margin-bottom: 6px;
 }
 
+/* 多模态图片预览区（V1.4.0）：输入框内缩略图内联展示 */
+.image-chips {
+  align-items: center;
+}
+
+.image-chip {
+  position: relative;
+  display: inline-block;
+  width: 52px;
+  height: 52px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  background: var(--vscode-badge-background, rgba(110, 110, 110, 0.2));
+}
+
+.image-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.image-chip .chip-remove {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 16px;
+  height: 16px;
+  line-height: 14px;
+  border-radius: 50%;
+  font-size: 11px;
+  text-align: center;
+  background: rgba(20, 20, 20, 0.75);
+  color: #fff;
+}
+
+.image-clear-all {
+  align-self: center;
+  padding: 3px 9px;
+  border-radius: 12px;
+  font-size: 11.5px;
+  background: var(--vscode-badge-background, rgba(110, 110, 110, 0.3));
+  color: var(--vscode-badge-foreground, var(--vscode-foreground));
+}
+
+.image-clear-all:hover {
+  opacity: 0.85;
+}
+
+/* 图片插入失败的轻量提示（格式/大小校验等，中性警示色） */
+.image-tip {
+  margin: 0 0 6px;
+  padding: 4px 9px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  color: var(--vscode-inputValidation-warningForeground, var(--vscode-foreground));
+  background: var(--vscode-inputValidation-warningBackground, rgba(180, 120, 20, 0.18));
+  border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(200, 140, 40, 0.6));
+}
+
+/* 用户消息历史回显的图片（V1.4.0） */
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.msg-images img {
+  max-width: 180px;
+  max-height: 140px;
+  border-radius: 6px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  object-fit: contain;
+  background: var(--vscode-badge-background, rgba(110, 110, 110, 0.15));
+}
+
 .attach-chip {
   display: inline-flex;
   align-items: center;
