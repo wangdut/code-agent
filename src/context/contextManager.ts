@@ -37,7 +37,7 @@ const SUMMARIZE_SYSTEM = `你是对话压缩器。将以下编程会话内容压
 const CHAT_MODE_CONSTRAINT = `
 
 ## 当前模式约束（对话模式）
-- 当前处于对话模式：仅可使用只读工具（read_file / list_dir / search_code / get_diff）读取工作区或本地任意路径的文件与目录，基于文件内容回答用户问题
+- 当前处于对话模式：仅可使用只读工具（read_file / list_dir / search_code / get_diff / web_search）读取工作区或本地任意路径的文件与目录、联网检索外部信息，基于文件内容与搜索结果回答用户问题
 - 禁止修改、写入、删除文件，禁止执行终端命令；此类操作会被系统一律拒绝
 - 如用户需要修改代码或执行命令，请明确告知用户：切换至智能体模式后即可执行`;
 

@@ -7,7 +7,7 @@ import * as path from 'path';
 
 export interface AuditEntry {
   time: string;
-  type: 'file' | 'command' | 'permission' | 'session';
+  type: 'file' | 'command' | 'permission' | 'session' | 'search';
   action: string;
   target: string;
   result: 'success' | 'error' | 'denied' | 'cancelled';

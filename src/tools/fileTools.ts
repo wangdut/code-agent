@@ -9,7 +9,7 @@ import * as vscode from 'vscode';
 import { exec, execFile } from 'child_process';
 import { SecurityManager } from '../security/securityManager';
 import { AuditLogger } from '../security/auditLogger';
-import { PermissionRequest, RunMode } from '../types';
+import { PermissionRequest, RunMode, WebSearchResultItem } from '../types';
 import { truncate } from '../utils/id';
 
 /** 工具执行结果 */
@@ -26,6 +26,10 @@ export interface ToolResult {
   denied?: boolean;
   /** 是否被用户取消 */
   cancelled?: boolean;
+  /** 联网搜索关键词（V1.5.0 web_search 工具，供节点简报展示） */
+  searchQuery?: string;
+  /** 联网搜索结构化结果（V1.5.0 过滤压缩后的精简条目，随步骤持久化） */
+  searchResults?: WebSearchResultItem[];
 }
 
 /** 权限申请回调（由 Agent 引擎注入，桥接 WebView 确认面板） */
@@ -41,6 +45,8 @@ export interface ToolContext {
   mode: RunMode;
   /** 终端输出流回调（实时展示） */
   onCommandOutput?: (command: string, chunk: string) => void;
+  /** 网络代理地址（V1.5.0 联网搜索复用全局代理配置） */
+  proxy?: string;
   signal?: AbortSignal;
 }
 

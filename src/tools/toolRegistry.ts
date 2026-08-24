@@ -5,6 +5,7 @@
 import { ToolDefinition } from '../models/modelAdapter';
 import { RunMode } from '../types';
 import { ToolContext, ToolResult, readFileTool, writeFileTool, listDirTool, searchCodeTool, diffTool, executeCommandTool } from './fileTools';
+import { webSearchTool } from './webSearchTool';
 
 export interface RegisteredTool {
   name: string;
@@ -148,6 +149,31 @@ export class ToolRegistry {
         }
       },
       execute: diffTool,
+      readonly: true
+    });
+
+    // 联网搜索（V1.5.0）：只读无副作用，对话/智能体两种模式均可用；全局开关关闭时调度层屏蔽
+    this.register({
+      name: 'web_search',
+      description:
+        '联网搜索互联网信息，返回 3-5 条高相关结果的精简摘要（标题+核心摘要+来源链接）。' +
+        '仅在需要时效性信息（最新技术文档、版本特性、实时报错解决方案）或外部知识（第三方库 API 用法、行业标准）时调用；' +
+        '常规本地代码修改、已有文件问答、纯逻辑推理禁止调用；同一关键词不要重复搜索。',
+      definition: {
+        type: 'function',
+        function: {
+          name: 'web_search',
+          description: '联网搜索时效性信息与外部知识（自动过滤压缩，返回精简摘要）',
+          parameters: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', description: '搜索关键词（提炼任务核心意图，简短精准，避免长句）' }
+            },
+            required: ['query']
+          }
+        }
+      },
+      execute: webSearchTool,
       readonly: true
     });
   }

@@ -65,6 +65,8 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
         highRiskCommands: form.highRiskCommands,
         // 保存兜底：非数字/超范围回退为合法值（1-1000，默认 128）
         maxToolIterations: Math.min(1000, Math.max(1, Math.round(Number(form.maxToolIterations) || 128))),
+        // 联网搜索全局开关（V1.5.0）：保存后即时生效，无需重启
+        webSearchEnabled: form.webSearchEnabled,
         autoCompressThreshold: Number(form.autoCompressThreshold),
         historyPath: form.historyPath,
         folderIncludePatterns: form.folderIncludePatterns,
@@ -376,6 +378,10 @@ export function SettingsPanel({ settings, usage, onClose }: Props): React.ReactE
               <span className="range-value">{Math.round(form.autoCompressThreshold * 100)}%</span>
             </div>
           </Field>
+          <div className="field-row">
+            <Checkbox label="启用联网搜索（Agent 在需要时效性信息/外部知识时自主搜索互联网）" checked={form.webSearchEnabled} onChange={v => set('webSearchEnabled', v)} />
+          </div>
+          <div className="field-hint">关闭后 Agent 不再调用搜索工具，能力回退至上一版本；搜索结果仅保留精简摘要与来源链接，严格控制 Token 开销；搜索异常不影响核心功能。保存后即时生效。</div>
         </Section>
 
         {/* 6. 存储配置 */}

@@ -2,7 +2,7 @@
   "name": "code-agent",
   "displayName": "Code Agent",
   "description": "基于大语言模型的智能编程 Agent：代码生成、文件编辑、终端执行、多轮任务自主闭环",
-  "version": "1.4.5",
+  "version": "1.5.0",
   "publisher": "wangh",
   "author": {
     "name": "wangh"
@@ -199,6 +199,11 @@
           "minimum": 1,
           "maximum": 1000,
           "description": "单轮任务中 Agent 可自主调度工具的最大次数（V1.1.0 默认 128，适配复杂长链路任务；触发上限时任务中断并提示）"
+        },
+        "codeAgent.webSearchEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用联网搜索（V1.5.0）：启用后 Agent 可在需要时效性信息或外部知识时自主决策调用联网搜索工具；关闭后调度层完全屏蔽搜索工具，任何场景均不发起搜索请求，能力回退至上一版本；修改即时生效，无需重启"
         },
         "codeAgent.autoCompressThreshold": {
           "type": "number",

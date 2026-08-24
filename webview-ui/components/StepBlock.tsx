@@ -29,6 +29,15 @@ function baseName(p?: string): string {
   return p.split(/[\\/]/).pop() ?? p;
 }
 
+/** 提取来源域名（联网搜索结果来源弱标注展示；非法 URL 原样返回） */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
 function StepIcon({ status }: { status: AgentStep['status'] }): React.ReactElement {
   const map: Record<string, string> = {
     pending: '…',
@@ -46,6 +55,8 @@ export const StepBlock = React.memo(function StepBlock({ step }: { step: AgentSt
 
   const isTerminal = step.toolName === 'execute_command';
   const isDiff = !!step.diff;
+  // 联网搜索节点（V1.5.0）：执行中展示关键词简报，完成后展示结构化精简结果（标题+摘要+来源）
+  const isWebSearch = step.toolName === 'web_search';
 
   let body: React.ReactNode = null;
   if (step.type === 'toolResult' || step.type === 'toolCall') {
@@ -75,6 +86,24 @@ export const StepBlock = React.memo(function StepBlock({ step }: { step: AgentSt
           <pre>{step.result ?? ''}</pre>
         </div>
       );
+    } else if (isWebSearch && step.searchResults && step.searchResults.length > 0) {
+      // 搜索完成：默认展示 3-5 条精简结果（标题+核心摘要+来源），整体高度受控（二级滚动），区块折叠复用统一规范
+      body = (
+        <div className="search-results scrollable-block">
+          {step.searchResults.map((r, i) => (
+            <div className="search-result-item" key={`${step.id}-${i}`}>
+              <a className="search-result-title" href={r.url} title={r.url}>
+                {i + 1}. {r.title}
+              </a>
+              {r.snippet && <div className="search-result-snippet">{r.snippet}</div>}
+              <div className="search-result-url">{hostOf(r.url)}</div>
+            </div>
+          ))}
+        </div>
+      );
+    } else if (isWebSearch && step.type === 'toolCall') {
+      // 搜索执行中：加载态（头部图标旋转）+ 当前搜索关键词简报，让用户明确知晓正在执行搜索
+      body = step.searchQuery ? <div className="search-query-brief">🔍 正在搜索：{step.searchQuery}</div> : null;
     } else if (step.type === 'toolCall' && step.toolArgs) {
       body = (
         <div className="step-args scrollable-block">

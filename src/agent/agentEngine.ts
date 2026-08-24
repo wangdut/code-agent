@@ -20,6 +20,12 @@ import { randomId, truncate } from '../utils/id';
 /** 工具结果回传模型的最大长度（Token 效率优化） */
 const MAX_TOOL_RESULT_LEN = 30000;
 
+/** 单轮任务联网搜索调用次数上限（V1.5.0：避免重复/冗余搜索，控制 Token 开销与执行耗时） */
+const MAX_WEB_SEARCH_PER_TURN = 5;
+
+/** 联网搜索工具名（调度层屏蔽与次数受控的判定基准） */
+const WEB_SEARCH_TOOL = 'web_search';
+
 /** 只读工具集合：无副作用，同批次可并行执行（流式执行流水线中也可预启动） */
 const READONLY_TOOLS = new Set<string>(READONLY_TOOL_NAMES);
 
@@ -32,6 +38,7 @@ const SYSTEM_PROMPT = `你是 Code Agent，VSCode 中的智能编程助手。你
 4. 终端操作：依赖安装、构建、测试等使用 execute_command，注意评估命令安全性
 5. 验证闭环：修改后使用 get_diff 或重新读取确认结果，必要时执行测试验证
 6. Token 效率：读取文件时按需分段，避免重复读取大文件；回答简洁直接
+7. 联网搜索（web_search，可用时）：仅在需要时效性信息（最新技术文档、版本特性、实时报错解决方案）或外部知识（第三方库 API 用法、行业标准、本地未覆盖的技术方案）时调用；常规本地代码修改、已有文件问答、纯逻辑推理等无需外部信息的场景禁止搜索；单任务内控制搜索次数，不重复搜索相同关键词；搜索结果已精简压缩，引用时注明来源；搜索失败不影响任务，回退基于已有知识作答
 
 ## 安全规则
 - 只能修改当前工作区内的文件，工作区外文件任何情况下只读（可读取，不可修改/删除）
@@ -89,6 +96,8 @@ export interface AgentDeps {
 
 export class AgentEngine {
   private readonly runs = new Map<string, AbortController>();
+  /** 单轮任务内各会话已消耗的联网搜索次数（V1.5.0 次数受控；每轮 runTurn 起始重置） */
+  private readonly webSearchCounts = new Map<string, number>();
 
   constructor(private readonly deps: AgentDeps) {}
 
@@ -118,7 +127,12 @@ export class AgentEngine {
 
   /** 构建发送给模型的工具集（V0.9.0：对话模式仅挂载只读工具，写入/终端工具不入请求，调度层屏蔽越权调用） */
   private buildTools(mode: RunMode) {
-    return this.deps.tools.getDefinitionsForMode(mode);
+    const defs = this.deps.tools.getDefinitionsForMode(mode);
+    // 联网搜索全局开关（V1.5.0）：关闭后调度层完全屏蔽搜索工具，不发起任何搜索请求（即时生效，无需重启）
+    if (!this.deps.config.getWebSearchEnabled()) {
+      return defs.filter(d => d.function.name !== WEB_SEARCH_TOOL);
+    }
+    return defs;
   }
 
   /**
@@ -210,6 +224,9 @@ export class AgentEngine {
     };
 
     try {
+      // 单轮任务联网搜索计数重置（V1.5.0 次数受控：每轮任务独立计数）
+      this.webSearchCounts.set(session.id, 0);
+
       // 1. 用户消息持久化（重新生成时跳过；图片随消息落盘供续接与重新生成复用）
       if (!skipUserAppend) {
         const userMessage: ChatMessage = {
@@ -255,10 +272,12 @@ export class AgentEngine {
           const step: AgentStep = {
             id: randomId(),
             type: 'toolCall',
-            title: `调用工具 ${tc.name}`,
+            title: toolStepTitle(tc),
             status: 'pending',
             toolName: tc.name,
             toolArgs: tc.arguments,
+            // 联网搜索节点即时展示搜索关键词简报（V1.5.0 流式可视化）
+            searchQuery: tc.name === WEB_SEARCH_TOOL ? safeParseQuery(tc.arguments) : undefined,
             createdAt: Date.now()
           };
           assistantMessage.steps!.push(step);
@@ -337,10 +356,11 @@ export class AgentEngine {
               step = {
                 id: randomId(),
                 type: 'toolCall',
-                title: `调用工具 ${tc.name}`,
+                title: toolStepTitle(tc),
                 status: 'pending',
                 toolName: tc.name,
                 toolArgs: tc.arguments,
+                searchQuery: tc.name === WEB_SEARCH_TOOL ? safeParseQuery(tc.arguments) : undefined,
                 createdAt: Date.now()
               };
               assistantMessage.steps!.push(step);
@@ -382,12 +402,18 @@ export class AgentEngine {
             const resultStep: AgentStep = {
               ...groupSteps[gi],
               type: 'toolResult',
-              title: `${tc.name} 执行${toolResult.success ? '成功' : toolResult.denied ? '被拒绝' : toolResult.cancelled ? '已取消' : '失败'}`,
+              // 联网搜索节点标题专属文案（V1.5.0）：失败时弱标注「未获取到有效结果」，无弹窗打断
+              title: tc.name === WEB_SEARCH_TOOL
+                ? (toolResult.success ? `联网搜索完成（${toolResult.searchResults?.length ?? 0} 条结果）` : '联网搜索：未获取到有效结果')
+                : `${tc.name} 执行${toolResult.success ? '成功' : toolResult.denied ? '被拒绝' : toolResult.cancelled ? '已取消' : '失败'}`,
               status: toolResult.success ? 'success' : 'error',
               result: toolResult.output,
               diff: toolResult.diff,
               filePath: toolResult.filePath,
-              command: toolResult.command
+              command: toolResult.command,
+              // 联网搜索结构化结果透传（V1.5.0：节点内摘要展示，随步骤持久化）
+              searchQuery: toolResult.searchQuery,
+              searchResults: toolResult.searchResults
             };
             const si = assistantMessage.steps!.findIndex(s => s.id === resultStep.id);
             if (si >= 0) {
@@ -454,6 +480,7 @@ export class AgentEngine {
       }
     } finally {
       this.runs.delete(session.id);
+      this.webSearchCounts.delete(session.id);
     }
 
     // 5. 结果落盘
@@ -589,6 +616,17 @@ export class AgentEngine {
       this.deps.audit.log({ type: 'permission', action: tc.name, target: tc.name, result: 'denied', detail: '对话模式越权工具调用被拦截', sessionId });
       return { success: false, output: modeCheck.reason ?? '权限拒绝：当前模式不允许该操作', denied: true };
     }
+    // 联网搜索护栏（V1.5.0）：全局开关关闭时执行层兜底屏蔽（不发起任何搜索请求）；单轮任务次数受控，避免重复/冗余搜索
+    if (tc.name === WEB_SEARCH_TOOL) {
+      if (!this.deps.config.getWebSearchEnabled()) {
+        return { success: false, output: '联网搜索功能已在设置中关闭，请基于本地信息与已有知识完成任务' };
+      }
+      const used = this.webSearchCounts.get(sessionId) ?? 0;
+      if (used >= MAX_WEB_SEARCH_PER_TURN) {
+        return { success: false, output: `本轮任务联网搜索次数已达上限（${MAX_WEB_SEARCH_PER_TURN} 次），请基于已获取的信息与本地知识继续完成任务，不要再次搜索` };
+      }
+      this.webSearchCounts.set(sessionId, used + 1);
+    }
     let args: any = {};
     try {
       args = JSON.parse(tc.arguments || '{}');
@@ -606,6 +644,8 @@ export class AgentEngine {
           cb.onCommandOutput(cmd, chunk);
           onLiveOutput?.(chunk);
         },
+        // 联网搜索复用全局代理配置（V1.5.0：与模型请求同口径）
+        proxy: this.deps.config.getProxy() || undefined,
         signal
       });
     } catch (err) {
@@ -652,6 +692,26 @@ function safeParseCommand(argsJson: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** 从工具参数 JSON 中安全提取联网搜索关键词（节点简报展示，超长截断） */
+function safeParseQuery(argsJson: string): string | undefined {
+  try {
+    const obj = JSON.parse(argsJson);
+    const q = typeof obj?.query === 'string' ? obj.query.trim() : '';
+    return q ? q.slice(0, 80) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 工具节点标题（V1.5.0：联网搜索节点展示「联网搜索：关键词」简报，其余工具保持原文案） */
+function toolStepTitle(tc: { name: string; arguments: string }): string {
+  if (tc.name === WEB_SEARCH_TOOL) {
+    const q = safeParseQuery(tc.arguments);
+    return q ? `联网搜索：${q}` : '联网搜索';
+  }
+  return `调用工具 ${tc.name}`;
 }
 
 /** 提取 write_file 的目标路径（用于同路径串行、不同路径并行分组） */

@@ -460,6 +460,11 @@ export class ConfigManager {
     return Math.min(1000, Math.max(1, Math.round(v)));
   }
 
+  /** 联网搜索全局开关（V1.5.0）：默认启用；关闭后 Agent 调度层完全屏蔽搜索工具，即时生效无需重启 */
+  getWebSearchEnabled(): boolean {
+    return !!this.config.get<boolean>('webSearchEnabled', true);
+  }
+
   // ---------- 存储 ----------
 
   /** 会话存储根目录：自定义绝对路径 或 工作区 .code-agent/history */
@@ -541,6 +546,7 @@ export class ConfigManager {
       terminalAutoApprove: this.getTerminalAutoApprove(),
       highRiskCommands: this.getHighRiskCommandsEnabled(),
       maxToolIterations: this.getMaxToolIterations(),
+      webSearchEnabled: this.getWebSearchEnabled(),
       autoCompressThreshold: this.getAutoCompressThreshold(),
       historyPath: this.config.get<string>('historyPath', ''),
       effectiveHistoryPath: this.getHistoryRoot(),
@@ -569,6 +575,7 @@ export class ConfigManager {
       terminalAutoApprove: 'terminalAutoApprove',
       highRiskCommands: 'highRiskCommands',
       maxToolIterations: 'maxToolIterations',
+      webSearchEnabled: 'webSearchEnabled',
       autoCompressThreshold: 'autoCompressThreshold',
       historyPath: 'historyPath',
       folderIncludePatterns: 'folderIncludePatterns',

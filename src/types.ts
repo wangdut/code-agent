@@ -64,10 +64,23 @@ export type RunMode = 'chat' | 'agent';
 
 /**
  * 只读工具名集合（V0.9.0 对话模式可用工具集）
- * 无副作用操作：文件读取、目录遍历、代码检索、diff 对比；支持并行执行与流式预启动
+ * 无副作用操作：文件读取、目录遍历、代码检索、diff 对比、联网搜索（V1.5.0）；支持并行执行与流式预启动
  * 同时作为统一权限校验层的判定基准：对话模式下仅这些工具可被执行
  */
-export const READONLY_TOOL_NAMES = ['read_file', 'list_dir', 'search_code', 'get_diff'] as const;
+export const READONLY_TOOL_NAMES = ['read_file', 'list_dir', 'search_code', 'get_diff', 'web_search'] as const;
+
+/**
+ * 联网搜索结果条目（V1.5.0）：原始结果经多层过滤压缩后的标准化结构（标题+核心摘要+来源链接），
+ * 随工具节点持久化，供前端结构化展示
+ */
+export interface WebSearchResultItem {
+  /** 结果标题（已清洗 HTML 标签与实体） */
+  title: string;
+  /** 核心摘要（清洗+语义截断后的精简内容） */
+  snippet: string;
+  /** 来源链接 */
+  url: string;
+}
 
 /** Token 用量统计 */
 export interface TokenUsage {
@@ -122,6 +135,10 @@ export interface AgentStep {
   filePath?: string;
   /** 权限请求 id（waiting 状态） */
   requestId?: string;
+  /** 联网搜索关键词（V1.5.0 web_search 工具节点简报展示） */
+  searchQuery?: string;
+  /** 联网搜索结构化结果（V1.5.0 过滤压缩后的精简条目，节点内摘要展示） */
+  searchResults?: WebSearchResultItem[];
   createdAt: number;
 }
 
@@ -269,6 +286,8 @@ export interface SettingsSnapshot {
   highRiskCommands: boolean;
   /** 单轮任务最大工具调用轮次（1-1000，默认 20） */
   maxToolIterations: number;
+  /** 联网搜索全局开关（V1.5.0）：默认启用；关闭后 Agent 调度层完全屏蔽搜索工具，即时生效 */
+  webSearchEnabled: boolean;
   autoCompressThreshold: number;
   historyPath: string;
   effectiveHistoryPath: string;
